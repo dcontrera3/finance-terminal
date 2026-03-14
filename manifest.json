@@ -1,0 +1,17 @@
+{
+  "name": "Finance Terminal",
+  "short_name": "FinTerminal",
+  "description": "Portfolio & technical analysis terminal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050709",
+  "theme_color": "#050709",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' fill='%23050709'/><text x='96' y='130' font-size='100' text-anchor='middle' fill='%2300d4ff'>F</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
