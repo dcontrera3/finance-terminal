@@ -998,8 +998,9 @@ function updateActive() {
 // ══════════════════════════════════════════
 // RIGHT PANEL
 // ══════════════════════════════════════════
-function renderRightPanel(fc, fh, fl, fv) {
-  const n=fc.length, cur=fc[n-1];
+function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
+  const n=fc.length;
+  const cur = realtimePrice || fc[n-1];
   const e20=ema(fc,20), e50=ema(fc,50), e200=ema(fc,200);
   const ev20=e20[n-1], ev50=e50[n-1], ev200=e200[n-1];
   const rsiArr=rsiCalc(fc,14), rv=rsiArr[n-1];
@@ -1166,7 +1167,7 @@ function buildCharts(marketData) {
   document.getElementById('stV').textContent=fmtV(fv[n-1]);
   document.getElementById('stA').textContent=fmt(atrV);
   renderSidebar(); renderTabs(); updateActive();
-  renderRightPanel(fc,fh,fl,fv);
+  renderRightPanel(fc,fh,fl,fv,displayPrice);
 
   // Guardamos indicadores para el análisis IA
   const {support, resistance} = pivots(fh, fl, fc);
