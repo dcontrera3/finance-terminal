@@ -428,6 +428,7 @@ canvas{display:block;}
     </div>
     <div class="live-dot" id="liveDot"></div>
     <span style="font-size:.6rem;color:var(--muted);font-family:'Space Mono',monospace" id="clock"></span>
+    <button id="refreshBtn" onclick="manualRefresh()" style="background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--muted);cursor:pointer;font-size:.7rem;padding:2px 7px;transition:all .15s;line-height:1;" title="Actualizar precios">↻</button>
     <div class="sim-btn" onclick="openSim()">⚡ SIM</div>
   </div>
 </div>
@@ -1366,6 +1367,23 @@ async function loadAllPrices() {
 
 // Refresco de precios 24h cada 15s
 setInterval(loadAllPrices, 15000);
+
+async function manualRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.style.color = 'var(--accent)';
+  btn.style.borderColor = 'var(--accent)';
+  btn.style.transform = 'rotate(360deg)';
+  btn.style.transition = 'transform .5s, color .15s, border-color .15s';
+  btn.disabled = true;
+  await loadAllPrices();
+  await loadChart();
+  setTimeout(() => {
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    btn.style.transform = '';
+    btn.disabled = false;
+  }, 600);
+}
 
 // Carga datos desde servidor (sincroniza entre dispositivos) y luego inicia la app
 loadFromServer().finally(() => {
