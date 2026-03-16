@@ -755,7 +755,12 @@ function totalCarteraActual() {
 let currentTicker = 'NVDA';
 let currentTF = '1W';
 let mainChart = null, rsiChart = null, macdChart = null;
-let priceCache = {};
+let priceCache = (() => {
+  try { return JSON.parse(localStorage.getItem('cedear_price_cache') || '{}'); } catch { return {}; }
+})();
+function savePriceCache() {
+  try { localStorage.setItem('cedear_price_cache', JSON.stringify(priceCache)); } catch {}
+}
 let dataCache  = {};
 
 // ══════════════════════════════════════════
@@ -1153,9 +1158,12 @@ function buildCharts(marketData) {
   document.getElementById('stV').textContent=fmtV(fv[n-1]);
   document.getElementById('stA').textContent=fmt(atrV);
 
-  // Precio actualizado; chg se mantiene del 1D si ya fue cargado
-  const prev24h = priceCache[currentTicker]?.chg;
-  priceCache[currentTicker] = { price: cur, chg: prev24h ?? chgPct };
+  // Precio: usar el fresco de fast_info si ya está cargado; chg siempre del 1D
+  const prev24h   = priceCache[currentTicker]?.chg;
+  const freshPrice = priceCache[currentTicker]?.price;
+  const displayPrice = freshPrice || cur;
+  priceCache[currentTicker] = { price: displayPrice, chg: prev24h ?? chgPct };
+  savePriceCache();
   renderSidebar(); renderTabs(); updateActive();
   renderRightPanel(fc,fh,fl,fv);
 
@@ -1367,6 +1375,7 @@ async function loadAllPrices() {
       priceCache[PORTFOLIO[i].ticker] = { price: d.current_price, chg: d.change_pct };
     }
   });
+  savePriceCache();
   ensureQtys();
   renderSidebar(); renderTabs(); updateActive();
 }
@@ -1381,6 +1390,7 @@ async function manualRefresh() {
   btn.style.transform = 'rotate(360deg)';
   btn.style.transition = 'transform .5s, color .15s, border-color .15s';
   btn.disabled = true;
+  dataCache = {};  // fuerza re-fetch del gráfico
   await loadAllPrices();
   await loadChart();
   setTimeout(() => {
