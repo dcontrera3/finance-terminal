@@ -1144,26 +1144,27 @@ function buildCharts(marketData) {
   const item=PORTFOLIO.find(p=>p.ticker===currentTicker);
   const col=item?.color||'var(--accent)';
 
+  // Precio: preferir fast_info (priceCache) sobre el último cierre del histórico
+  const prev24h    = priceCache[currentTicker]?.chg;
+  const freshPrice = priceCache[currentTicker]?.price;
+  const displayPrice = freshPrice || cur;
+  priceCache[currentTicker] = { price: displayPrice, chg: prev24h ?? chgPct };
+  savePriceCache();
+
   // Header
   document.getElementById('chSym').textContent  = currentTicker;
   document.getElementById('chSym').style.color  = col;
-  document.getElementById('chPx').textContent   = fmt(cur);
+  document.getElementById('chPx').textContent   = fmt(displayPrice);
   document.getElementById('chPx').style.color   = col;
+  const chChg24h = prev24h ?? chgPct;
   const chEl=document.getElementById('chChg');
-  chEl.textContent=(chgPct>=0?'+':'')+chgPct.toFixed(2)+'%';
-  chEl.className='ch-chg '+(chgPct>=0?'up':'dn');
+  chEl.textContent=(chChg24h>=0?'+':'')+chChg24h.toFixed(2)+'%';
+  chEl.className='ch-chg '+(chChg24h>=0?'up':'dn');
   document.getElementById('stO').textContent=fmt(fo[n-1]);
   document.getElementById('stH').textContent=fmt(fh[n-1]);
   document.getElementById('stL').textContent=fmt(fl[n-1]);
   document.getElementById('stV').textContent=fmtV(fv[n-1]);
   document.getElementById('stA').textContent=fmt(atrV);
-
-  // Precio: usar el fresco de fast_info si ya está cargado; chg siempre del 1D
-  const prev24h   = priceCache[currentTicker]?.chg;
-  const freshPrice = priceCache[currentTicker]?.price;
-  const displayPrice = freshPrice || cur;
-  priceCache[currentTicker] = { price: displayPrice, chg: prev24h ?? chgPct };
-  savePriceCache();
   renderSidebar(); renderTabs(); updateActive();
   renderRightPanel(fc,fh,fl,fv);
 
