@@ -99,8 +99,8 @@ def quote(ticker):
         cur, chg = None, 0
         try:
             fi         = tk.fast_info
-            cur        = clean(fi.get('last_price') or fi.get('regularMarketPrice'))
-            prev_close = clean(fi.get('previous_close') or fi.get('regularMarketPreviousClose'))
+            cur        = clean(fi.get('lastPrice') or fi.get('regularMarketPrice'))
+            prev_close = clean(fi.get('previousClose') or fi.get('regularMarketPreviousClose'))
             if cur and prev_close:
                 chg = round((cur - prev_close) / prev_close * 100, 2)
         except:
@@ -130,8 +130,8 @@ def price(ticker):
     """Precio real-time vía fast_info — sin caché de histórico."""
     try:
         fi         = yf.Ticker(ticker).fast_info
-        cur        = clean(fi.get('last_price') or fi.get('regularMarketPrice'))
-        prev_close = clean(fi.get('previous_close') or fi.get('regularMarketPreviousClose'))
+        cur        = clean(fi.get('lastPrice') or fi.get('regularMarketPrice'))
+        prev_close = clean(fi.get('previousClose') or fi.get('regularMarketPreviousClose'))
         chg        = round((cur - prev_close) / prev_close * 100, 2) if cur and prev_close else 0
         return jsonify({"ticker": ticker.upper(), "current_price": cur, "change_pct": chg})
     except Exception as e:
