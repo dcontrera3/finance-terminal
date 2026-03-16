@@ -36,10 +36,23 @@ except ImportError:
     import anthropic
 
 import math
+import os
+import requests as http
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)  # Permite requests desde el HTML abierto localmente
+
+# ── Supabase config ──
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
+
+def sb_headers():
+    return {
+        'apikey': SUPABASE_KEY,
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': 'application/json',
+    }
 
 INTERVAL_MAP = {
     "1D":  ("1d",  "6mo"),
@@ -255,6 +268,34 @@ CONFIANZA: [X/10]
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/sync", methods=["GET"])
+def sync_get():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return jsonify({}), 200
+    try:
+        r = http.get(f'{SUPABASE_URL}/rest/v1/app_data', headers=sb_headers(), timeout=5)
+        rows = r.json()
+        return jsonify({row['key']: row['value'] for row in rows if 'key' in row})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route("/sync", methods=["POST"])
+def sync_post():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return jsonify({'ok': False}), 200
+    try:
+        data = request.json
+        headers = {**sb_headers(), 'Prefer': 'resolution=merge-duplicates,return=minimal'}
+        http.post(
+            f'{SUPABASE_URL}/rest/v1/app_data',
+            headers=headers,
+            json={'key': data['key'], 'value': data['value'], 'updated_at': datetime.utcnow().isoformat()},
+            timeout=5
+        )
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route("/health")
 def health():

@@ -627,8 +627,39 @@ let PORTFOLIO = (() => {
 let portfolioTotal = (() => {
   const s = localStorage.getItem('cedear_total'); return s ? parseFloat(s) : DEFAULT_TOTAL;
 })();
-function savePortfolio() { localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO)); }
-function saveTotal(v) { portfolioTotal = v; localStorage.setItem('cedear_total', v); }
+// ── Sincronización con servidor ──
+async function syncToServer(key, value) {
+  try { await fetch(`${API}/sync`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({key, value}) }); } catch {}
+}
+async function loadFromServer() {
+  try {
+    const r = await fetch(`${API}/sync`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.portfolio && Array.isArray(data.portfolio.items)) {
+      PORTFOLIO = data.portfolio.items;
+      localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
+    }
+    if (data.portfolio?.total) {
+      portfolioTotal = data.portfolio.total;
+      localStorage.setItem('cedear_total', portfolioTotal);
+    }
+    if (data.simulator && Array.isArray(data.simulator)) {
+      simPositions = data.simulator;
+      localStorage.setItem(SIM_KEY, JSON.stringify(simPositions));
+    }
+  } catch {}
+}
+
+function savePortfolio() {
+  localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
+  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal });
+}
+function saveTotal(v) {
+  portfolioTotal = v;
+  localStorage.setItem('cedear_total', v);
+  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal });
+}
 
 // Asegura que cada item tenga qty calculado al precio actual
 function ensureQtys() {
@@ -1286,10 +1317,13 @@ async function loadAllPrices() {
 // Refresco de precios 24h cada 15s
 setInterval(loadAllPrices, 15000);
 
-renderSidebar();
-renderTabs();
-loadAllPrices();
-loadChart();
+// Carga datos desde servidor (sincroniza entre dispositivos) y luego inicia la app
+loadFromServer().finally(() => {
+  renderSidebar();
+  renderTabs();
+  loadAllPrices();
+  loadChart();
+});
 
 // ══════════════════════════════════════════
 // INFO POPUP
@@ -1863,6 +1897,7 @@ function setDir(d) {
 
 function saveSim() {
   localStorage.setItem(SIM_KEY, JSON.stringify(simPositions));
+  syncToServer('simulator', simPositions);
 }
 
 async function addSimPosition() {
