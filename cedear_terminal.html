@@ -1178,15 +1178,15 @@ function buildCharts(marketData) {
 
   lastIndicators = {
     ticker: currentTicker, timeframe: currentTF,
-    price: cur, chg_24h: priceCache[currentTicker]?.chg ?? chgPct,
+    price: displayPrice, chg_24h: priceCache[currentTicker]?.chg ?? chgPct,
     ema20: e20[n-1], ema50: e50[n-1], ema200: e200[n-1],
     rsi: rsiArr[n-1],
     macd_line: macdLine[n-1], macd_signal: macdSig[n-1], macd_hist: macdHist[n-1],
     bb_upper: b_last?.upper, bb_mid: b_last?.mid, bb_lower: b_last?.lower,
-    bb_position: b_last ? (cur > b_last.upper ? 'FUERA SUPERIOR' : cur < b_last.lower ? 'FUERA INFERIOR' : 'DENTRO') : 'N/D',
+    bb_position: b_last ? (displayPrice > b_last.upper ? 'FUERA SUPERIOR' : displayPrice < b_last.lower ? 'FUERA INFERIOR' : 'DENTRO') : 'N/D',
     atr: atrV, vol_ratio: fv[n-1] / volAvgLast,
     support, resistance,
-    bull_score: [cur>e20[n-1],cur>e50[n-1],cur>e200[n-1],e20[n-1]>e50[n-1],e50[n-1]>e200[n-1],rsiArr[n-1]>50,macdLine[n-1]>macdSig[n-1],macdHist[n-1]>0].filter(Boolean).length,
+    bull_score: [displayPrice>e20[n-1],displayPrice>e50[n-1],displayPrice>e200[n-1],e20[n-1]>e50[n-1],e50[n-1]>e200[n-1],rsiArr[n-1]>50,macdLine[n-1]>macdSig[n-1],macdHist[n-1]>0].filter(Boolean).length,
     total_signals: 8,
     portfolioTotal, liquidityUSD, currentPosUSD,
   };
