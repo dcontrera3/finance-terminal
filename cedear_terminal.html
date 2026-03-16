@@ -1350,10 +1350,16 @@ window.addEventListener('resize', () => {
 });
 
 // Carga precios 24h de todos los tickers en paralelo
+async function fetchPrice(ticker) {
+  const r = await fetch(`${API}/price/${ticker}`);
+  if (!r.ok) throw new Error('price error');
+  return r.json();
+}
+
 async function loadAllPrices() {
   if (!await checkServer()) return;
   const results = await Promise.allSettled(
-    PORTFOLIO.map(item => fetchQuote(item.ticker, '1D'))
+    PORTFOLIO.map(item => fetchPrice(item.ticker))
   );
   results.forEach((res, i) => {
     if (res.status === 'fulfilled') {

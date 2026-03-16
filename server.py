@@ -95,14 +95,22 @@ def quote(ticker):
         # Filtrar filas con datos nulos
         rows = [r for r in rows if all(r[k] is not None for k in ["open","high","low","close"])]
 
-        cur  = rows[-1]["close"] if rows else None
-        prev = rows[-2]["close"] if len(rows) > 1 else cur
-        chg  = round((cur - prev) / prev * 100, 2) if cur and prev else 0
-
-        info = {}
+        # Precio real-time desde fast_info (evita caché de history)
+        cur, chg = None, 0
         try:
-            info = tk.fast_info
-        except: pass
+            fi         = tk.fast_info
+            cur        = clean(fi.get('last_price') or fi.get('regularMarketPrice'))
+            prev_close = clean(fi.get('previous_close') or fi.get('regularMarketPreviousClose'))
+            if cur and prev_close:
+                chg = round((cur - prev_close) / prev_close * 100, 2)
+        except:
+            pass
+
+        # Fallback: último cierre del histórico
+        if not cur and rows:
+            cur  = rows[-1]["close"]
+            prev = rows[-2]["close"] if len(rows) > 1 else cur
+            chg  = round((cur - prev) / prev * 100, 2) if cur and prev else 0
 
         return jsonify({
             "ticker":        ticker.upper(),
@@ -114,6 +122,18 @@ def quote(ticker):
             "data":          rows,
         })
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/price/<ticker>")
+def price(ticker):
+    """Precio real-time vía fast_info — sin caché de histórico."""
+    try:
+        fi         = yf.Ticker(ticker).fast_info
+        cur        = clean(fi.get('last_price') or fi.get('regularMarketPrice'))
+        prev_close = clean(fi.get('previous_close') or fi.get('regularMarketPreviousClose'))
+        chg        = round((cur - prev_close) / prev_close * 100, 2) if cur and prev_close else 0
+        return jsonify({"ticker": ticker.upper(), "current_price": cur, "change_pct": chg})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
