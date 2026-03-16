@@ -318,6 +318,28 @@ canvas{display:block;}
 .sim-del{cursor:pointer;color:var(--muted);font-size:.7rem;padding:2px 6px;
   border:1px solid var(--border2);border-radius:2px;background:transparent;}
 .sim-del:hover{color:var(--red);border-color:var(--red);}
+.sim-cash-btn{cursor:pointer;font-size:.58rem;padding:2px 7px;border-radius:2px;
+  border:1px solid rgba(0,230,118,0.4);background:rgba(0,230,118,0.06);
+  color:var(--green);font-family:'Space Mono',monospace;transition:all .15s;}
+.sim-cash-btn:hover{background:rgba(0,230,118,0.15);border-color:var(--green);}
+.sim-cash-btn.loss{border-color:rgba(255,23,68,0.4);background:rgba(255,23,68,0.06);color:var(--red);}
+.sim-cash-btn.loss:hover{background:rgba(255,23,68,0.15);border-color:var(--red);}
+.sim-closed-wrap{margin-top:16px;border-top:1px solid var(--border);padding-top:12px;}
+.sim-closed-title{font-size:.5rem;letter-spacing:2px;color:var(--muted);
+  font-family:'Space Mono',monospace;margin-bottom:8px;}
+.sim-closed-table{width:100%;border-collapse:collapse;font-size:.58rem;min-width:500px;}
+.sim-closed-table th{text-align:left;padding:4px 8px;font-size:.48rem;letter-spacing:1px;
+  color:var(--muted);font-family:'Space Mono',monospace;border-bottom:1px solid var(--border);}
+.sim-closed-table td{padding:5px 8px;border-bottom:1px solid rgba(30,37,53,0.4);
+  font-family:'Space Mono',monospace;color:var(--muted);}
+.sim-balance-box{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;background:var(--bg2);border-radius:4px;border:1px solid var(--border2);
+  margin-bottom:12px;}
+.sim-balance-label{font-size:.5rem;letter-spacing:2px;color:var(--muted);font-family:'Space Mono',monospace;}
+.sim-balance-val{font-family:'Space Mono',monospace;font-size:.95rem;font-weight:700;}
+.sim-balance-reset{font-size:.55rem;color:var(--muted);cursor:pointer;border:1px solid var(--border2);
+  border-radius:2px;padding:2px 7px;background:transparent;font-family:'Space Mono',monospace;}
+.sim-balance-reset:hover{color:var(--red);border-color:var(--red);}
 
 /* ── MOBILE NAV ── */
 .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;
@@ -482,9 +504,17 @@ canvas{display:block;}
           <button class="sim-add-btn" onclick="addSimPosition()">+ AGREGAR</button>
         </div>
       </div>
+      <!-- Balance acumulado -->
+      <div class="sim-balance-box" id="simBalanceBox">
+        <div>
+          <div class="sim-balance-label">RESULTADO ACUMULADO (CIERRES)</div>
+          <div class="sim-balance-val" id="simBalanceVal" style="color:var(--muted)">$0.00</div>
+        </div>
+        <button class="sim-balance-reset" onclick="resetSimBalance()">RESETEAR</button>
+      </div>
       <!-- Summary -->
       <div class="sim-summary" id="simSummary"></div>
-      <!-- Table -->
+      <!-- Table posiciones abiertas -->
       <div class="sim-table-wrap">
         <table class="sim-table">
           <thead>
@@ -496,6 +526,16 @@ canvas{display:block;}
           <tbody id="simBody"></tbody>
         </table>
         <div id="simEmpty" class="sim-empty">No hay posiciones simuladas. Agregá una arriba.</div>
+      </div>
+      <!-- Historial de cierres -->
+      <div class="sim-closed-wrap" id="simClosedWrap" style="display:none">
+        <div class="sim-closed-title">HISTORIAL DE POSICIONES CERRADAS</div>
+        <div class="sim-table-wrap">
+          <table class="sim-closed-table">
+            <thead><tr><th>TICKER</th><th>DIR</th><th>ENTRADA</th><th>CIERRE</th><th>CANT</th><th>P&L $</th><th>P&L %</th><th>FECHA</th></tr></thead>
+            <tbody id="simClosedBody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -644,9 +684,19 @@ async function loadFromServer() {
       portfolioTotal = data.portfolio.total;
       localStorage.setItem('cedear_total', portfolioTotal);
     }
-    if (data.simulator && Array.isArray(data.simulator)) {
-      simPositions = data.simulator;
-      localStorage.setItem(SIM_KEY, JSON.stringify(simPositions));
+    if (data.simulator) {
+      const sim = data.simulator;
+      if (Array.isArray(sim)) {
+        // formato legacy
+        simPositions = sim;
+      } else {
+        if (Array.isArray(sim.open))   simPositions = sim.open;
+        if (Array.isArray(sim.closed)) simClosedPositions = sim.closed;
+        if (typeof sim.balance === 'number') simAccumulatedPnl = sim.balance;
+      }
+      localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
+      localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
+      localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
     }
   } catch {}
 }
@@ -1870,9 +1920,13 @@ function closeAdvice() {
 // ══════════════════════════════════════════
 // SIMULATOR
 // ══════════════════════════════════════════
-const SIM_KEY = 'cedear_sim_positions';
-let simDir = 'LONG';
-let simPositions = JSON.parse(localStorage.getItem(SIM_KEY) || '[]');
+const SIM_KEY        = 'cedear_sim_positions';
+const SIM_CLOSED_KEY = 'cedear_sim_closed';
+const SIM_BALANCE_KEY= 'cedear_sim_balance';
+let simDir           = 'LONG';
+let simPositions     = JSON.parse(localStorage.getItem(SIM_KEY)        || '[]');
+let simClosedPositions = JSON.parse(localStorage.getItem(SIM_CLOSED_KEY) || '[]');
+let simAccumulatedPnl  = parseFloat(localStorage.getItem(SIM_BALANCE_KEY) || '0');
 
 function openSim() {
   renderSimulator();
@@ -1896,8 +1950,38 @@ function setDir(d) {
 }
 
 function saveSim() {
-  localStorage.setItem(SIM_KEY, JSON.stringify(simPositions));
-  syncToServer('simulator', simPositions);
+  localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
+  localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
+  localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
+  syncToServer('simulator', { open: simPositions, closed: simClosedPositions, balance: simAccumulatedPnl });
+}
+
+function cashSimPosition(id) {
+  const idx = simPositions.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  const p = simPositions[idx];
+  const cur = priceCache[p.ticker]?.price ?? null;
+  if (cur == null) { alert('Sin precio actual para cerrar la posición.'); return; }
+  const pnl    = p.dir === 'LONG' ? (cur - p.entry) * p.qty : (p.entry - cur) * p.qty;
+  const pnlPct = p.dir === 'LONG' ? (cur - p.entry) / p.entry * 100 : (p.entry - cur) / p.entry * 100;
+  simAccumulatedPnl += pnl;
+  simClosedPositions.unshift({
+    id: p.id, ticker: p.ticker, dir: p.dir,
+    entry: p.entry, exit: cur, qty: p.qty,
+    pnl: parseFloat(pnl.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)),
+    date: p.date, closeDate: new Date().toLocaleDateString('es-AR'),
+  });
+  simPositions.splice(idx, 1);
+  saveSim();
+  renderSimulator();
+}
+
+function resetSimBalance() {
+  if (!confirm('¿Resetear el resultado acumulado y el historial de cierres?')) return;
+  simAccumulatedPnl = 0;
+  simClosedPositions = [];
+  saveSim();
+  renderSimulator();
 }
 
 async function addSimPosition() {
@@ -1997,6 +2081,7 @@ function renderSimulator() {
             ? '<span style="color:var(--green)">✓ GANANDO</span>'
             : '<span style="color:var(--red)">✗ PERDIENDO</span>';
 
+    const cashClass = pnlVal == null ? '' : pnlVal >= 0 ? '' : 'loss';
     return `<tr style="${slTouched ? 'background:rgba(255,23,68,0.04)' : tpTouched ? 'background:rgba(0,230,118,0.04)' : ''}">
       <td style="color:var(--accent);font-weight:700">${p.ticker}</td>
       <td style="color:${dirColor}">${p.dir}</td>
@@ -2008,18 +2093,52 @@ function renderSimulator() {
       <td style="color:${pnlColor}">${pnlVal != null ? (pnlVal>=0?'+':'')+pnlVal.toFixed(2) : '--'}</td>
       <td style="color:${pnlColor}">${pnlPct != null ? (pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%' : '--'}</td>
       <td>${estado}</td>
-      <td><button class="sim-del" onclick="removeSimPosition(${p.id})">✕</button></td>
+      <td style="display:flex;gap:4px;align-items:center">
+        <button class="sim-cash-btn ${cashClass}" onclick="cashSimPosition(${p.id})" ${cur==null?'disabled':''}>CASH</button>
+        <button class="sim-del" onclick="removeSimPosition(${p.id})">✕</button>
+      </td>
     </tr>`;
   }).join('');
 
   const totalPct = totalInvested > 0 ? totalPnl / totalInvested * 100 : 0;
-  const pc = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  const pc  = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  const bpc = simAccumulatedPnl >= 0 ? 'var(--green)' : 'var(--red)';
   summary.innerHTML = `
     <div class="sim-stat"><div class="sl">POSICIONES</div><div class="sv">${simPositions.length}</div></div>
     <div class="sim-stat"><div class="sl">INVERTIDO (SIM)</div><div class="sv">$${totalInvested.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
-    <div class="sim-stat"><div class="sl">P&amp;L TOTAL</div><div class="sv" style="color:${pc}">${totalPnl>=0?'+':''}$${totalPnl.toFixed(2)}</div></div>
+    <div class="sim-stat"><div class="sl">P&amp;L ABIERTO</div><div class="sv" style="color:${pc}">${totalPnl>=0?'+':''}$${totalPnl.toFixed(2)}</div></div>
     <div class="sim-stat"><div class="sl">RETORNO</div><div class="sv" style="color:${pc}">${totalPct>=0?'+':''}${totalPct.toFixed(2)}%</div></div>
     <div class="sim-stat"><div class="sl">GANANDO/TOTAL</div><div class="sv" style="color:var(--yellow)">${winning}/${open}</div></div>`;
+
+  // Balance acumulado de cierres
+  const balEl = document.getElementById('simBalanceVal');
+  if (balEl) {
+    balEl.textContent = (simAccumulatedPnl >= 0 ? '+' : '') + '$' + simAccumulatedPnl.toFixed(2);
+    balEl.style.color = bpc;
+  }
+
+  // Historial de posiciones cerradas
+  const closedWrap = document.getElementById('simClosedWrap');
+  const closedBody = document.getElementById('simClosedBody');
+  if (simClosedPositions.length > 0) {
+    closedWrap.style.display = 'block';
+    closedBody.innerHTML = simClosedPositions.map(c => {
+      const cc = c.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const dc = c.dir === 'LONG' ? 'var(--green)' : 'var(--red)';
+      return `<tr>
+        <td style="color:var(--accent)">${c.ticker}</td>
+        <td style="color:${dc}">${c.dir}</td>
+        <td>$${c.entry.toFixed(2)}</td>
+        <td>$${c.exit.toFixed(2)}</td>
+        <td>${c.qty}</td>
+        <td style="color:${cc}">${c.pnl>=0?'+':''}$${c.pnl.toFixed(2)}</td>
+        <td style="color:${cc}">${c.pnlPct>=0?'+':''}${c.pnlPct.toFixed(2)}%</td>
+        <td>${c.closeDate}</td>
+      </tr>`;
+    }).join('');
+  } else {
+    closedWrap.style.display = 'none';
+  }
 }
 
 // Auto-refrescar precios del simulador cuando se actualicen los precios
