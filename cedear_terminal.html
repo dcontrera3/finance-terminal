@@ -341,6 +341,42 @@ canvas{display:block;}
   border-radius:2px;padding:2px 7px;background:transparent;font-family:'Space Mono',monospace;}
 .sim-balance-reset:hover{color:var(--red);border-color:var(--red);}
 
+/* ── WATCHLIST ── */
+.wl-section{border-top:1px solid var(--border);flex-shrink:0;}
+.wl-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;
+  cursor:pointer;user-select:none;}
+.wl-head-label{font-size:.54rem;letter-spacing:2px;color:var(--muted);font-family:'Space Mono',monospace;}
+.wl-toggle{font-size:.6rem;color:var(--muted);transition:transform .2s;}
+.wl-toggle.open{transform:rotate(180deg);}
+.wl-body{display:none;overflow-y:auto;max-height:240px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+.wl-body.open{display:block;}
+.wl-item{padding:7px 12px;border-bottom:1px solid var(--border);cursor:pointer;
+  transition:background .12s;display:flex;flex-direction:column;gap:2px;}
+.wl-item:hover{background:var(--bg2);}
+.wl-item.active{background:rgba(0,212,255,0.05);border-left:2px solid var(--accent);}
+.wl-r1{display:flex;align-items:center;gap:5px;}
+.wl-sym{font-family:'Space Mono',monospace;font-weight:700;font-size:.76rem;color:var(--accent);}
+.wl-px{font-family:'Space Mono',monospace;font-size:.7rem;margin-left:auto;}
+.wl-r2{display:flex;align-items:center;gap:5px;}
+.wl-name{font-size:.56rem;color:var(--muted);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.wl-chg{font-size:.6rem;font-family:'Space Mono',monospace;}
+.wl-actions{display:flex;gap:4px;margin-top:3px;}
+.wl-btn{font-size:.5rem;padding:1px 5px;border-radius:2px;cursor:pointer;
+  font-family:'Space Mono',monospace;border:1px solid var(--border2);background:transparent;
+  color:var(--muted);transition:all .12s;}
+.wl-btn:hover{border-color:var(--accent);color:var(--accent);}
+.wl-btn.sim{border-color:rgba(171,71,188,0.4);color:#ce93d8;}
+.wl-btn.sim:hover{border-color:#ce93d8;background:rgba(171,71,188,0.08);}
+.wl-btn.del:hover{border-color:var(--red);color:var(--red);}
+.wl-add{padding:7px 12px;display:flex;gap:5px;}
+.wl-add input{flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:3px;
+  color:var(--text);font-family:'Space Mono',monospace;font-size:.62rem;padding:3px 7px;outline:none;}
+.wl-add input:focus{border-color:var(--accent);}
+.wl-add-btn{padding:3px 8px;border-radius:3px;cursor:pointer;font-size:.6rem;
+  font-family:'Space Mono',monospace;border:1px solid rgba(0,212,255,0.4);
+  background:rgba(0,212,255,0.06);color:var(--accent);white-space:nowrap;}
+.wl-add-btn:hover{background:rgba(0,212,255,0.15);}
+
 /* ── MOBILE NAV ── */
 .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;
   background:var(--bg1);border-top:1px solid var(--border);
@@ -559,6 +595,22 @@ canvas{display:block;}
         </div>
       </div>
     </div>
+    <!-- WATCHLIST -->
+    <div class="wl-section">
+      <div class="wl-head" onclick="toggleWatchlist()">
+        <span class="wl-head-label">👁 SEGUIMIENTO</span>
+        <span class="wl-toggle" id="wlToggle">▾</span>
+      </div>
+      <div class="wl-body" id="wlBody">
+        <div id="wlList"></div>
+        <div class="wl-add">
+          <input id="wlInput" type="text" placeholder="Ticker (ej: TSLA)" autocomplete="off"
+            style="text-transform:uppercase" onkeydown="if(event.key==='Enter')addWatchItem()">
+          <button class="wl-add-btn" onclick="addWatchItem()">+ SEGUIR</button>
+        </div>
+      </div>
+    </div>
+
     <div class="sb-alloc">
       <div class="sb-alloc-title">ALOCACIÓN</div>
       <div id="allocBars"></div>
@@ -698,6 +750,10 @@ async function loadFromServer() {
       localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
       localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
       localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
+    }
+    if (data.watchlist && Array.isArray(data.watchlist)) {
+      watchlist = data.watchlist;
+      localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
     }
   } catch {}
 }
@@ -1368,18 +1424,20 @@ async function fetchPrice(ticker) {
 
 async function loadAllPrices() {
   if (!await checkServer()) return;
-  const results = await Promise.allSettled(
-    PORTFOLIO.map(item => fetchPrice(item.ticker))
-  );
+  const allTickers = [
+    ...PORTFOLIO.map(p => p.ticker),
+    ...watchlist.map(w => w.ticker).filter(t => !PORTFOLIO.find(p => p.ticker === t))
+  ];
+  const results = await Promise.allSettled(allTickers.map(t => fetchPrice(t)));
   results.forEach((res, i) => {
     if (res.status === 'fulfilled') {
       const d = res.value;
-      priceCache[PORTFOLIO[i].ticker] = { price: d.current_price, chg: d.change_pct };
+      priceCache[allTickers[i]] = { price: d.current_price, chg: d.change_pct };
     }
   });
   savePriceCache();
   ensureQtys();
-  renderSidebar(); renderTabs(); updateActive();
+  renderSidebar(); renderTabs(); updateActive(); renderWatchlist();
 }
 
 // Refresco de precios 24h cada 15s
@@ -1407,6 +1465,8 @@ async function manualRefresh() {
 loadFromServer().finally(() => {
   renderSidebar();
   renderTabs();
+  renderWatchlist();
+  if (watchlist.length > 0) toggleWatchlist(); // abrir si hay items
   loadAllPrices();
   loadChart();
 });
@@ -1497,6 +1557,109 @@ document.addEventListener('click', e => {
 });
 
 // ══════════════════════════════════════════
+// ══════════════════════════════════════════
+// WATCHLIST
+// ══════════════════════════════════════════
+const WL_KEY = 'cedear_watchlist';
+let watchlist = JSON.parse(localStorage.getItem(WL_KEY) || '[]');
+let wlOpen = false;
+
+function saveWatchlist() {
+  localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
+  syncToServer('watchlist', watchlist);
+}
+
+function toggleWatchlist() {
+  wlOpen = !wlOpen;
+  document.getElementById('wlBody').classList.toggle('open', wlOpen);
+  document.getElementById('wlToggle').classList.toggle('open', wlOpen);
+}
+
+async function addWatchItem() {
+  const inp = document.getElementById('wlInput');
+  const ticker = inp.value.trim().toUpperCase();
+  if (!ticker) return;
+  if (watchlist.find(w => w.ticker === ticker) || PORTFOLIO.find(p => p.ticker === ticker)) {
+    inp.value = ''; return;
+  }
+  inp.disabled = true;
+  try {
+    const d = await fetchPrice(ticker);
+    if (!d.current_price) throw new Error();
+    priceCache[ticker] = { price: d.current_price, chg: d.change_pct };
+    savePriceCache();
+    watchlist.push({ ticker, name: ticker });
+    saveWatchlist();
+    renderWatchlist();
+  } catch {
+    inp.style.borderColor = 'var(--red)';
+    setTimeout(() => inp.style.borderColor = '', 1200);
+  }
+  inp.disabled = false;
+  inp.value = '';
+}
+
+function removeWatchItem(ticker) {
+  watchlist = watchlist.filter(w => w.ticker !== ticker);
+  saveWatchlist();
+  renderWatchlist();
+}
+
+function watchToSim(ticker) {
+  const price = priceCache[ticker]?.price;
+  if (!price) return;
+  document.getElementById('simTk').value = ticker;
+  document.getElementById('simEntry').value = price.toFixed(2);
+  openSim();
+}
+
+function renderWatchlist() {
+  const list = document.getElementById('wlList');
+  if (!list) return;
+  if (watchlist.length === 0) {
+    list.innerHTML = '<div style="padding:10px 12px;font-size:.58rem;color:var(--muted)">Agregá tickers para seguirlos.</div>';
+    return;
+  }
+  list.innerHTML = watchlist.map(w => {
+    const c   = priceCache[w.ticker];
+    const px  = c ? fmt(c.price) : '···';
+    const chg = c?.chg ?? null;
+    const cc  = chg == null ? 'var(--muted)' : chg >= 0 ? 'var(--green)' : 'var(--red)';
+    const cs  = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
+    const isActive = w.ticker === currentTicker;
+    return `<div class="wl-item${isActive?' active':''}" onclick="loadWatchTicker('${w.ticker}')">
+      <div class="wl-r1">
+        <span class="wl-sym">${w.ticker}</span>
+        <span class="wl-px">${px}</span>
+      </div>
+      <div class="wl-r2">
+        <span class="wl-name">${w.name}</span>
+        <span class="wl-chg" style="color:${cc}">${cs}</span>
+      </div>
+      <div class="wl-actions">
+        <button class="wl-btn" onclick="event.stopPropagation();openNews('${w.ticker}')">📰 NEWS</button>
+        <button class="wl-btn sim" onclick="event.stopPropagation();watchToSim('${w.ticker}')">⚡ SIM</button>
+        <button class="wl-btn" onclick="event.stopPropagation();openAdviceFor('${w.ticker}')">✦ IA</button>
+        <button class="wl-btn del" onclick="event.stopPropagation();removeWatchItem('${w.ticker}')">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadWatchTicker(ticker) {
+  currentTicker = ticker;
+  updateActive();
+  loadChart();
+}
+
+async function openAdviceFor(ticker) {
+  // Cambia al ticker y espera que cargue el gráfico antes de abrir el consejo
+  currentTicker = ticker;
+  updateActive();
+  await loadChart();
+  openAdvice();
+}
+
 // NEWS & EARNINGS
 // ══════════════════════════════════════════
 const newsCache = {};
