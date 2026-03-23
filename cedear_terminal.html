@@ -16,6 +16,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@1.2.1/dist/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --bg0:#050709; --bg1:#0b0e13; --bg2:#111520; --bg3:#171c28;
@@ -68,8 +69,14 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
 /* ── SIDEBAR ── */
 .sidebar{width:210px;flex-shrink:0;background:var(--bg1);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden;}
-.sb-head{padding:8px 12px;border-bottom:1px solid var(--border);
-  font-size:.56rem;letter-spacing:2px;color:var(--muted);font-family:'Space Mono',monospace;}
+.sb-tabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;}
+.sb-tab{flex:1;padding:8px 4px;background:transparent;border:none;border-bottom:2px solid transparent;
+  color:var(--muted);font-family:'Space Mono',monospace;font-size:.54rem;letter-spacing:1px;
+  cursor:pointer;transition:all .15s;}
+.sb-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.sb-tab:hover:not(.active){color:var(--text);}
+.sb-panel{display:none;flex-direction:column;flex:1;overflow:hidden;}
+.sb-panel.active{display:flex;}
 .port-list{overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
 .pi{padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;
   transition:background .12s;position:relative;}
@@ -342,14 +349,6 @@ canvas{display:block;}
 .sim-balance-reset:hover{color:var(--red);border-color:var(--red);}
 
 /* ── WATCHLIST ── */
-.wl-section{border-top:1px solid var(--border);flex-shrink:0;}
-.wl-head{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;
-  cursor:pointer;user-select:none;}
-.wl-head-label{font-size:.54rem;letter-spacing:2px;color:var(--muted);font-family:'Space Mono',monospace;}
-.wl-toggle{font-size:.6rem;color:var(--muted);transition:transform .2s;}
-.wl-toggle.open{transform:rotate(180deg);}
-.wl-body{display:none;overflow-y:auto;max-height:240px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
-.wl-body.open{display:block;}
 .wl-item{padding:7px 12px;border-bottom:1px solid var(--border);cursor:pointer;
   transition:background .12s;display:flex;flex-direction:column;gap:2px;}
 .wl-item:hover{background:var(--bg2);}
@@ -442,9 +441,64 @@ canvas{display:block;}
   /* info popup full width on mobile */
   .info-popup{left:8px !important;right:8px !important;width:auto !important;max-width:none !important;}
 }
+
+/* ── INDICATOR TOGGLES ── */
+.ind-row{cursor:pointer;border-radius:3px;transition:opacity .15s,background .15s;}
+.ind-row:hover{background:rgba(255,255,255,0.03);}
+.ind-row.ind-off{opacity:0.32;}
+.ind-row.ind-off .rl{text-decoration:line-through;}
+.ind-section-title{cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;}
+.ind-section-title::before{content:'●';font-size:.45rem;color:var(--accent);transition:color .15s;}
+.ind-section-title.ind-off::before{color:var(--muted);}
+.ind-section-title.ind-off{opacity:0.45;}
+.fibo-dot{width:8px;height:3px;border-radius:1px;display:inline-block;}
+
+/* ── AUTH OVERLAY ── */
+#authOverlay{position:fixed;inset:0;z-index:10000;background:var(--bg0);display:flex;align-items:center;justify-content:center;}
+.auth-card{width:340px;background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:32px;display:flex;flex-direction:column;gap:18px;}
+.auth-brand{font-family:'Bebas Neue',sans-serif;font-size:1.55rem;letter-spacing:3px;color:var(--accent);text-align:center;text-shadow:0 0 20px rgba(0,212,255,0.35);}
+.auth-tabs{display:flex;border:1px solid var(--border2);border-radius:4px;overflow:hidden;}
+.auth-tab{flex:1;background:transparent;border:none;color:var(--muted);font-family:'Space Mono',monospace;font-size:.62rem;letter-spacing:1px;padding:9px;cursor:pointer;transition:all .15s;}
+.auth-tab.active{background:var(--bg3);color:var(--accent);}
+.auth-form{display:flex;flex-direction:column;gap:10px;}
+.auth-input{background:var(--bg2);border:1px solid var(--border2);border-radius:4px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:.82rem;padding:10px 12px;outline:none;transition:border-color .15s;}
+.auth-input:focus{border-color:var(--accent);}
+.auth-input::placeholder{color:var(--muted);}
+.auth-submit{background:var(--accent);border:none;border-radius:4px;color:#000;cursor:pointer;font-family:'Space Mono',monospace;font-size:.7rem;font-weight:700;letter-spacing:1px;padding:11px;transition:opacity .15s;margin-top:2px;}
+.auth-submit:hover{opacity:.85;}
+.auth-submit:disabled{opacity:.5;cursor:not-allowed;}
+.auth-msg{font-size:.72rem;text-align:center;min-height:16px;}
+.auth-msg.error{color:var(--red);}
+.auth-msg.ok{color:var(--green);}
+.logout-btn{background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--muted);cursor:pointer;font-family:'Space Mono',monospace;font-size:.6rem;padding:2px 7px;line-height:1;transition:all .15s;}
+.logout-btn:hover{border-color:var(--red);color:var(--red);}
 </style>
 </head>
 <body>
+
+<!-- AUTH OVERLAY -->
+<div id="authOverlay">
+  <div class="auth-card">
+    <div class="auth-brand">FINANCE // TERMINAL</div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('login')">INGRESAR</button>
+      <button class="auth-tab" onclick="switchAuthTab('register')">REGISTRARSE</button>
+    </div>
+    <div class="auth-form" id="loginForm">
+      <input class="auth-input" type="email" id="authEmail" placeholder="email@ejemplo.com" autocomplete="email">
+      <input class="auth-input" type="password" id="authPassword" placeholder="Contraseña" autocomplete="current-password">
+      <button class="auth-submit" id="loginBtn" onclick="doLogin()">INGRESAR</button>
+      <div class="auth-msg error" id="loginMsg"></div>
+    </div>
+    <div class="auth-form" id="registerForm" style="display:none">
+      <input class="auth-input" type="email" id="regEmail" placeholder="email@ejemplo.com" autocomplete="email">
+      <input class="auth-input" type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="new-password">
+      <input class="auth-input" type="password" id="regConfirm" placeholder="Confirmar contraseña" autocomplete="new-password">
+      <button class="auth-submit" id="registerBtn" onclick="doRegister()">CREAR CUENTA</button>
+      <div class="auth-msg" id="registerMsg"></div>
+    </div>
+  </div>
+</div>
 
 <!-- SERVER DOWN BANNER -->
 <div class="banner" id="banner">
@@ -466,6 +520,7 @@ canvas{display:block;}
     <span style="font-size:.6rem;color:var(--muted);font-family:'Space Mono',monospace" id="clock"></span>
     <button id="refreshBtn" onclick="manualRefresh()" style="background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--muted);cursor:pointer;font-size:.7rem;padding:2px 7px;transition:all .15s;line-height:1;" title="Actualizar precios">↻</button>
     <div class="sim-btn" onclick="openSim()">⚡ SIM</div>
+    <button class="logout-btn" id="logoutBtn" onclick="doLogout()" style="display:none" title="Cerrar sesión">SALIR</button>
   </div>
 </div>
 
@@ -582,46 +637,49 @@ canvas{display:block;}
 <div class="main">
   <!-- SIDEBAR -->
   <div class="sidebar">
-    <div class="sb-head">CARTERA · CEDEARs</div>
-    <div class="port-list" id="portList"></div>
-    <div class="sb-add">
-      <button class="sb-add-btn" id="sbAddBtn" onclick="toggleAddForm()">+ AGREGAR POSICIÓN</button>
-      <div class="sb-add-form" id="sbAddForm" style="display:none">
-        <input id="newTicker" type="text" placeholder="Ticker (ej: AAPL)" autocomplete="off" style="text-transform:uppercase">
-        <input id="newShares" type="number" placeholder="Monto en USD (ej: 1500)" min="0" step="any">
-        <div class="sb-add-actions">
-          <button class="sb-ok" onclick="addPortfolioItem()">AGREGAR</button>
-          <button class="sb-cancel" onclick="toggleAddForm()">Cancelar</button>
+    <div class="sb-tabs">
+      <button class="sb-tab active" id="sbTabCartera" onclick="switchSbTab('cartera')">CARTERA</button>
+      <button class="sb-tab" id="sbTabSeguimiento" onclick="switchSbTab('seguimiento')">SEGUIMIENTO</button>
+    </div>
+
+    <!-- Panel: Cartera -->
+    <div class="sb-panel active" id="sbCartera">
+      <div class="port-list" id="portList"></div>
+      <div class="sb-add">
+        <button class="sb-add-btn" id="sbAddBtn" onclick="toggleAddForm()">+ AGREGAR POSICIÓN</button>
+        <div class="sb-add-form" id="sbAddForm" style="display:none">
+          <input id="newTicker" type="text" placeholder="Ticker (ej: AAPL)" autocomplete="off" style="text-transform:uppercase">
+          <input id="newShares" type="number" placeholder="Monto en USD (ej: 1500)" min="0" step="any">
+          <div class="sb-add-actions">
+            <button class="sb-ok" onclick="addPortfolioItem()">AGREGAR</button>
+            <button class="sb-cancel" onclick="toggleAddForm()">Cancelar</button>
+          </div>
+        </div>
+      </div>
+      <div class="sb-alloc">
+        <div class="sb-alloc-title">ALOCACIÓN</div>
+        <div id="allocBars"></div>
+        <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:3px">
+            <span style="color:var(--muted)">Total cartera</span>
+            <span id="totalValDisplay" style="color:var(--accent);font-family:'Space Mono',monospace;cursor:pointer;border-bottom:1px dashed var(--border2)" title="Click para editar">$<span id="totalVal">--</span></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:2px">
+            <span style="color:var(--muted)">Liquidez</span>
+            <span style="color:var(--yellow);font-family:'Space Mono',monospace">$<span id="liquidityVal">--</span> · <span id="liquidityPct">--%</span></span>
+          </div>
         </div>
       </div>
     </div>
-    <!-- WATCHLIST -->
-    <div class="wl-section">
-      <div class="wl-head" onclick="toggleWatchlist()">
-        <span class="wl-head-label">👁 SEGUIMIENTO</span>
-        <span class="wl-toggle" id="wlToggle">▾</span>
-      </div>
-      <div class="wl-body" id="wlBody">
+
+    <!-- Panel: Seguimiento -->
+    <div class="sb-panel" id="sbSeguimiento">
+      <div class="wl-body" id="wlBody" style="display:flex;flex-direction:column;flex:1;overflow-y:auto;">
         <div id="wlList"></div>
         <div class="wl-add">
           <input id="wlInput" type="text" placeholder="Ticker (ej: TSLA)" autocomplete="off"
             style="text-transform:uppercase" onkeydown="if(event.key==='Enter')addWatchItem()">
           <button class="wl-add-btn" onclick="addWatchItem()">+ SEGUIR</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="sb-alloc">
-      <div class="sb-alloc-title">ALOCACIÓN</div>
-      <div id="allocBars"></div>
-      <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
-        <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:3px">
-          <span style="color:var(--muted)">Total cartera</span>
-          <span id="totalValDisplay" style="color:var(--accent);font-family:'Space Mono',monospace;cursor:pointer;border-bottom:1px dashed var(--border2)" title="Click para editar">$<span id="totalVal">--</span></span>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:2px">
-          <span style="color:var(--muted)">Liquidez</span>
-          <span style="color:var(--yellow);font-family:'Space Mono',monospace">$<span id="liquidityVal">--</span> · <span id="liquidityPct">--%</span></span>
         </div>
       </div>
     </div>
@@ -687,6 +745,137 @@ canvas{display:block;}
 // CONFIG
 // ══════════════════════════════════════════
 const API = window.location.protocol === 'file:' ? 'http://localhost:5000' : window.location.origin;
+
+// ══════════════════════════════════════════
+// AUTH — Supabase
+// ══════════════════════════════════════════
+let supabaseClient = null;
+let authToken      = null;
+
+// Patch fetch global: incluye Bearer token en todas las llamadas a la API
+const _rawFetch = window.fetch.bind(window);
+window.fetch = async function(url, opts = {}) {
+  if (typeof url === 'string' && url.startsWith(API) && authToken) {
+    opts = { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${authToken}` } };
+  }
+  return _rawFetch(url, opts);
+};
+
+async function initAuth() {
+  try {
+    const cfg = await _rawFetch(`${API}/config`).then(r => r.json());
+    if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+      hideAuthOverlay();
+      initApp();
+      return;
+    }
+    const { createClient } = supabase;
+    supabaseClient = createClient(cfg.supabase_url, cfg.supabase_anon_key);
+
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session) {
+      authToken = session.access_token;
+      hideAuthOverlay();
+      initApp();
+    } else {
+      // overlay already visible
+    }
+
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        authToken = session.access_token;
+      } else {
+        authToken = null;
+        showAuthOverlay();
+      }
+    });
+  } catch(e) {
+    console.error('Auth init error:', e);
+    hideAuthOverlay();
+    initApp();
+  }
+}
+
+function showAuthOverlay() {
+  document.getElementById('authOverlay').style.display = 'flex';
+  document.getElementById('logoutBtn').style.display = 'none';
+}
+
+function hideAuthOverlay() {
+  document.getElementById('authOverlay').style.display = 'none';
+  document.getElementById('logoutBtn').style.display = '';
+}
+
+function switchAuthTab(tab) {
+  document.getElementById('loginForm').style.display    = tab === 'login'    ? 'flex' : 'none';
+  document.getElementById('registerForm').style.display = tab === 'register' ? 'flex' : 'none';
+  document.querySelectorAll('.auth-tab').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0) === (tab === 'login'));
+  });
+  document.getElementById('loginMsg').textContent    = '';
+  document.getElementById('registerMsg').textContent = '';
+}
+
+async function doLogin() {
+  const email = document.getElementById('authEmail').value.trim();
+  const pass  = document.getElementById('authPassword').value;
+  const btn   = document.getElementById('loginBtn');
+  const msg   = document.getElementById('loginMsg');
+  if (!email || !pass) { msg.textContent = 'Completá los campos.'; return; }
+  btn.disabled = true; btn.textContent = 'INGRESANDO...'; msg.textContent = '';
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
+  if (error) {
+    msg.textContent = error.message === 'Invalid login credentials'
+      ? 'Email o contraseña incorrectos.'
+      : error.message;
+    btn.disabled = false; btn.textContent = 'INGRESAR';
+    return;
+  }
+  authToken = data.session.access_token;
+  hideAuthOverlay();
+  initApp();
+}
+
+async function doRegister() {
+  const email   = document.getElementById('regEmail').value.trim();
+  const pass    = document.getElementById('regPassword').value;
+  const confirm = document.getElementById('regConfirm').value;
+  const btn     = document.getElementById('registerBtn');
+  const msg     = document.getElementById('registerMsg');
+  if (!email || !pass) { msg.className = 'auth-msg error'; msg.textContent = 'Completá los campos.'; return; }
+  if (pass !== confirm)  { msg.className = 'auth-msg error'; msg.textContent = 'Las contraseñas no coinciden.'; return; }
+  if (pass.length < 6)   { msg.className = 'auth-msg error'; msg.textContent = 'Mínimo 6 caracteres.'; return; }
+  btn.disabled = true; btn.textContent = 'CREANDO...'; msg.textContent = '';
+  const { data, error } = await supabaseClient.auth.signUp({ email, password: pass });
+  if (error) {
+    msg.className = 'auth-msg error'; msg.textContent = error.message;
+    btn.disabled = false; btn.textContent = 'CREAR CUENTA';
+    return;
+  }
+  if (data.session) {
+    authToken = data.session.access_token;
+    hideAuthOverlay();
+    initApp();
+  } else {
+    msg.className = 'auth-msg ok';
+    msg.textContent = 'Cuenta creada. Revisá tu email para confirmar.';
+    btn.disabled = false; btn.textContent = 'CREAR CUENTA';
+  }
+}
+
+async function doLogout() {
+  if (supabaseClient) await supabaseClient.auth.signOut();
+  authToken = null;
+  showAuthOverlay();
+}
+
+// ── Estado de indicadores (persiste entre recargas de gráfico) ──
+const indicatorState = {
+  ema20: true, ema50: true, ema200: true,
+  bb: true, vol: true, rsi: true, macd: true, fibo: false
+};
+let lastFiboData = null; // { hi, lo, levels[] }
+let lastRpArgs   = null; // últimos args de renderRightPanel para re-render al toggle
 
 const DEFAULT_PORTFOLIO = [
   {ticker:'NVDA', name:'NVIDIA Corp.',       usd:1546, color:'#00e5ff'},
@@ -878,6 +1067,13 @@ function pivots(h, l, c) {
   };
 }
 
+function fiboCalc(highs, lows) {
+  const hi = Math.max(...highs), lo = Math.min(...lows), diff = hi - lo;
+  const ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  const colors = ['#9e9e9e','#ffd600','#00d4ff','#9e9e9e','#00e676','#ea80fc','#9e9e9e'];
+  return { hi, lo, levels: ratios.map((r, i) => ({ ratio: r, price: hi - diff * r, color: colors[i] })) };
+}
+
 const fmt  = (n,d=2) => n==null||isNaN(n)?'--': n>=1000?'$'+n.toFixed(d).replace(/\B(?=(\d{3})+(?!\d))/g,','):'$'+n.toFixed(d);
 const fmtV = n => !n?'--': n>1e9?(n/1e9).toFixed(1)+'B': n>1e6?(n/1e6).toFixed(1)+'M': (n/1e3).toFixed(0)+'K';
 
@@ -1055,6 +1251,7 @@ function updateActive() {
 // RIGHT PANEL
 // ══════════════════════════════════════════
 function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
+  lastRpArgs = [fc, fh, fl, fv, realtimePrice]; // guarda para re-render al toggle
   const n=fc.length;
   const cur = realtimePrice || fc[n-1];
   const e20=ema(fc,20), e50=ema(fc,50), e200=ema(fc,200);
@@ -1083,12 +1280,20 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
   const lSL=s1*0.98, lRR=((r1-cur)/(cur-lSL)).toFixed(1);
   const sigColor = bp>=65?'var(--green)':bp<=40?'var(--red)':'var(--muted)';
 
+  const fiboLevels = lastFiboData?.levels || [];
+
   document.getElementById('rPanel').innerHTML = `
   <div class="rps">
     <div class="rps-t">TENDENCIA<button class="info-btn" onclick="showInfoPopup('tendencia',this)">!</button></div>
-    <div class="rr"><span class="rl">EMA 20</span><span class="rv" style="color:var(--ema20)">${fmt(ev20)}</span></div>
-    <div class="rr"><span class="rl">EMA 50</span><span class="rv" style="color:var(--ema50)">${fmt(ev50)}</span></div>
-    <div class="rr"><span class="rl">EMA 200</span><span class="rv" style="color:var(--ema200)">${fmt(ev200)}</span></div>
+    <div class="rr ind-row ${indicatorState.ema20?'':'ind-off'}" data-toggle="ema20">
+      <span class="rl" style="color:var(--ema20)">● EMA 20</span><span class="rv" style="color:var(--ema20)">${fmt(ev20)}</span>
+    </div>
+    <div class="rr ind-row ${indicatorState.ema50?'':'ind-off'}" data-toggle="ema50">
+      <span class="rl" style="color:var(--ema50)">● EMA 50</span><span class="rv" style="color:var(--ema50)">${fmt(ev50)}</span>
+    </div>
+    <div class="rr ind-row ${indicatorState.ema200?'':'ind-off'}" data-toggle="ema200">
+      <span class="rl" style="color:var(--ema200)">● EMA 200</span><span class="rv" style="color:var(--ema200)">${fmt(ev200)}</span>
+    </div>
     <div class="rr" style="margin-top:4px">
       <span class="rl">vs EMA20</span>
       <span class="badge ${cur>ev20?'b-bull':'b-bear'}">${cur>ev20?'SOBRE':'BAJO'}</span>
@@ -1100,14 +1305,16 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
   </div>
   <div class="rps">
     <div class="rps-t">MOMENTUM<button class="info-btn" onclick="showInfoPopup('momentum',this)">!</button></div>
-    <div class="rr"><span class="rl">RSI (14)</span><span class="rv" style="color:${rsiColor}">${rv!=null?rv.toFixed(1):'--'}</span></div>
+    <div class="rr ind-row ${indicatorState.rsi?'':'ind-off'}" data-toggle="rsi">
+      <span class="rl">RSI (14)</span><span class="rv" style="color:${rsiColor}">${rv!=null?rv.toFixed(1):'--'}</span>
+    </div>
     <div class="rsi-track"><div class="rsi-fill" style="width:${rv||50}%;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red))"></div></div>
     <div class="rsi-zones"><span>0</span><span>30</span><span>50</span><span>70</span><span>100</span></div>
     <div class="rr" style="margin-top:4px">
       <span class="rl">Estado RSI</span>
       <span class="badge ${rv>70?'b-warn':rv<30?'b-bull':'b-neut'}">${rv>70?'SOBRECOMPRA':rv<30?'SOBREVENTA':'NEUTRAL'}</span>
     </div>
-    <div class="rr" style="margin-top:4px">
+    <div class="rr ind-row ${indicatorState.macd?'':'ind-off'}" data-toggle="macd" style="margin-top:4px">
       <span class="rl">MACD</span>
       <span class="rv" style="color:${ml[n-1]>ms[n-1]?'var(--green)':'var(--red)'}">${ml[n-1]?.toFixed(2)||'--'}</span>
     </div>
@@ -1120,16 +1327,17 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
   <div class="rps">
     <div class="rps-t">VOLATILIDAD<button class="info-btn" onclick="showInfoPopup('volatilidad',this)">!</button></div>
     ${b?`
-    <div class="rr"><span class="rl">BB Superior</span><span class="rv" style="color:var(--accent)">${fmt(b.upper)}</span></div>
-    <div class="rr"><span class="rl">BB Media</span><span class="rv">${fmt(b.mid)}</span></div>
-    <div class="rr"><span class="rl">BB Inferior</span><span class="rv" style="color:var(--accent)">${fmt(b.lower)}</span></div>
+    <div class="rr ind-row ${indicatorState.bb?'':'ind-off'}" data-toggle="bb">
+      <span class="rl">Bollinger</span>
+      <span class="rv" style="color:var(--accent)">${fmt(b.upper)} / ${fmt(b.lower)}</span>
+    </div>
     <div class="rr" style="margin-top:4px">
       <span class="rl">Posición BB</span>
       <span class="badge ${cur>b.upper?'b-warn':cur<b.lower?'b-bull':'b-neut'}">${cur>b.upper?'FUERA SUP':cur<b.lower?'FUERA INF':'DENTRO'}</span>
     </div>`:'<div style="color:var(--muted);font-size:.62rem">Datos insuficientes</div>'}
     <div class="rr" style="margin-top:4px"><span class="rl">ATR (14)</span><span class="rv">${fmt(atrV)}</span></div>
-    <div class="rr">
-      <span class="rl">Vol vs Avg</span>
+    <div class="rr ind-row ${indicatorState.vol?'':'ind-off'}" data-toggle="vol">
+      <span class="rl">Volumen</span>
       <span class="badge ${volR>1.5?'b-bull':'b-neut'}">×${volR.toFixed(1)}</span>
     </div>
   </div>
@@ -1141,6 +1349,17 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
       <span class="rv" style="color:${col}">${fmt(cur)}</span>
     </div>
     ${support.map((s,i)=>`<div class="rr"><span class="rl">S${i+1}</span><span class="rv" style="color:var(--green)">${fmt(s)}</span></div>`).join('')}
+  </div>
+  <div class="rps">
+    <div class="rps-t ind-section-title ${indicatorState.fibo?'':'ind-off'}" data-toggle="fibo" style="cursor:pointer">
+      FIBONACCI<button class="info-btn" onclick="event.stopPropagation();showInfoPopup('fibonacci',this)">!</button>
+    </div>
+    ${indicatorState.fibo && fiboLevels.length ? fiboLevels.map(lvl=>`
+    <div class="rr">
+      <span class="rl"><span class="fibo-dot" style="background:${lvl.color}"></span> ${(lvl.ratio*100).toFixed(1)}%</span>
+      <span class="rv" style="color:${lvl.color}">${fmt(lvl.price)}</span>
+    </div>`).join('')
+    : `<div style="color:var(--muted);font-size:.62rem;padding:2px 0">Click para activar</div>`}
   </div>
   <div style="padding:9px 11px 4px">
     <div class="rps-t">SEÑAL GLOBAL<button class="info-btn" onclick="showInfoPopup('señal',this)">!</button></div>
@@ -1162,6 +1381,36 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
     <div class="sr"><span>Target S1</span><span style="color:var(--green)">${fmt(s1)}</span></div>
     <div class="sr"><span>Ruptura</span><span style="color:var(--muted)">&lt; EMA ${cur>ev20?'20':'50'}</span></div>
   </div>`;
+}
+
+// ══════════════════════════════════════════
+// INDICATOR TOGGLE ENGINE
+// ══════════════════════════════════════════
+function applyIndicatorState() {
+  if (mainChart) {
+    const ds = mainChart.data.datasets;
+    // índices fijos: 0=candles,1=BBSup,2=BBMid,3=BBInf,4=EMA20,5=EMA50,6=EMA200,7=Vol, 8-14=Fibo
+    if (ds[1]) ds[1].hidden = !indicatorState.bb;
+    if (ds[2]) ds[2].hidden = !indicatorState.bb;
+    if (ds[3]) ds[3].hidden = !indicatorState.bb;
+    if (ds[4]) ds[4].hidden = !indicatorState.ema20;
+    if (ds[5]) ds[5].hidden = !indicatorState.ema50;
+    if (ds[6]) ds[6].hidden = !indicatorState.ema200;
+    if (ds[7]) ds[7].hidden = !indicatorState.vol;
+    for (let i = 8; i < ds.length; i++) { if (ds[i]) ds[i].hidden = !indicatorState.fibo; }
+    mainChart.update('none');
+  }
+  // RSI / MACD panels
+  const rcb = document.querySelector('.rcb'), mab = document.querySelector('.mab');
+  if (rcb) rcb.style.display = indicatorState.rsi  ? '' : 'none';
+  if (mab) mab.style.display = indicatorState.macd ? '' : 'none';
+}
+
+function toggleIndicator(key) {
+  indicatorState[key] = !indicatorState[key];
+  applyIndicatorState();
+  // Re-render solo el panel derecho para actualizar resaltados
+  if (lastRpArgs) renderRightPanel(...lastRpArgs);
 }
 
 // ══════════════════════════════════════════
@@ -1223,6 +1472,7 @@ function buildCharts(marketData) {
   document.getElementById('stV').textContent=fmtV(fv[n-1]);
   document.getElementById('stA').textContent=fmt(atrV);
   renderSidebar(); renderTabs(); updateActive();
+  lastFiboData = fiboCalc(fh, fl); // antes de renderRightPanel para que esté disponible
   renderRightPanel(fc,fh,fl,fv,displayPrice);
 
   // Guardamos indicadores para el análisis IA
@@ -1251,6 +1501,15 @@ function buildCharts(marketData) {
 
   resizeCanvases();
 
+  // Fibonacci datasets (lastFiboData ya fue calculado antes de renderRightPanel)
+  const fiboDatasets = lastFiboData.levels.map(lvl => ({
+    type: 'line', label: `Fibo ${(lvl.ratio*100).toFixed(1)}%`,
+    data: [{x: fts[0], y: lvl.price}, {x: fts[fts.length-1], y: lvl.price}],
+    borderColor: lvl.color, borderWidth: lvl.ratio === 0.618 ? 1.5 : 1,
+    borderDash: [5, 4], pointRadius: 0, yAxisID: 'y', fill: false,
+    hidden: !indicatorState.fibo,
+  }));
+
   const mkPts = arr => fts.map((t,i)=>({x:t,y:arr[i]}));
   const candles = fts.map((t,i)=>({x:t,o:fo[i],h:fh[i],l:fl[i],c:fc[i]}));
 
@@ -1271,6 +1530,7 @@ function buildCharts(marketData) {
       { type:'line', label:'EMA50',  data:mkPts(e50),  borderColor:'#ab47bc', borderWidth:1.5, pointRadius:0, yAxisID:'y', fill:false },
       { type:'line', label:'EMA200', data:mkPts(e200), borderColor:'#ef5350', borderWidth:2,   pointRadius:0, yAxisID:'y', fill:false },
       { type:'bar',  label:'Vol',    data:mkPts(fv),   backgroundColor:vGrad, yAxisID:'vol',   barThickness:'flex' },
+      ...fiboDatasets,
     ]},
     options: {
       responsive:false, maintainAspectRatio:false, animation:{duration:350},
@@ -1354,6 +1614,9 @@ function buildCharts(marketData) {
   document.getElementById('mainLoader').style.display='none';
 
   document.getElementById('mainChart').ondblclick = () => { if(mainChart) mainChart.resetZoom(); };
+
+  // Aplica el estado de indicadores (por si el usuario los desactivó antes)
+  applyIndicatorState();
 }
 
 // ══════════════════════════════════════════
@@ -1397,6 +1660,16 @@ async function loadChart() {
     document.getElementById('loadBar').style.width='0%';
   }
 }
+
+// ══════════════════════════════════════════
+// INDICATOR TOGGLE — event delegation
+// ══════════════════════════════════════════
+document.getElementById('rPanel').addEventListener('click', e => {
+  const row = e.target.closest('[data-toggle]');
+  if (!row) return;
+  e.stopPropagation();
+  toggleIndicator(row.dataset.toggle);
+});
 
 // ══════════════════════════════════════════
 // INIT
@@ -1461,15 +1734,20 @@ async function manualRefresh() {
   }, 600);
 }
 
-// Carga datos desde servidor (sincroniza entre dispositivos) y luego inicia la app
-loadFromServer().finally(() => {
-  renderSidebar();
-  renderTabs();
-  renderWatchlist();
-  if (watchlist.length > 0) toggleWatchlist(); // abrir si hay items
-  loadAllPrices();
-  loadChart();
-});
+// Inicializa la app (se llama desde auth, una vez que hay sesión válida)
+function initApp() {
+  loadFromServer().finally(() => {
+    renderSidebar();
+    renderTabs();
+    renderWatchlist();
+    if (watchlist.length > 0) toggleWatchlist();
+    loadAllPrices();
+    loadChart();
+  });
+}
+
+// Arranca el flujo de autenticación
+initAuth();
 
 // ══════════════════════════════════════════
 // INFO POPUP
@@ -1522,6 +1800,18 @@ const INFO_CONTENT = {
        • <span class="tag" style="background:rgba(255,23,68,.12);color:var(--red)">≤ 35% alcistas</span> → VENTA SHORT<br>
        • <span class="tag" style="background:rgba(90,101,126,.15);color:var(--muted)">Entre 35–65%</span> → NEUTRO</p>
     <p>A mayor porcentaje de confluencia, mayor confianza en la señal. Una señal con 8/8 indicadores alineados es mucho más confiable que una con 5/8.</p>`
+  },
+  fibonacci: {
+    title: 'RETROCESOS DE FIBONACCI',
+    body: `<p>Los <strong>retrocesos de Fibonacci</strong> identifican niveles de soporte y resistencia basados en ratios matemáticos presentes en la naturaleza.</p>
+    <p>Se calculan entre el <strong>máximo y mínimo</strong> del período visible:</p>
+    <p>• <span style="color:#9e9e9e">0% / 100%</span> — extremos del movimiento<br>
+       • <span style="color:#ffd600">23.6%</span> — retroceso superficial (tendencia fuerte)<br>
+       • <span style="color:#00d4ff">38.2%</span> — primer soporte relevante<br>
+       • <span style="color:#9e9e9e">50%</span> — mitad del movimiento (psicológico)<br>
+       • <span style="color:#00e676">61.8%</span> — "Número de Oro", el nivel más importante<br>
+       • <span style="color:#ea80fc">78.6%</span> — retroceso profundo (tendencia debilitada)</p>
+    <p>Si el precio rebota en el 61.8%, es una señal fuerte de continuación de la tendencia previa.</p>`
   }
 };
 
@@ -1562,17 +1852,21 @@ document.addEventListener('click', e => {
 // ══════════════════════════════════════════
 const WL_KEY = 'cedear_watchlist';
 let watchlist = JSON.parse(localStorage.getItem(WL_KEY) || '[]');
-let wlOpen = false;
 
 function saveWatchlist() {
   localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
   syncToServer('watchlist', watchlist);
 }
 
+function switchSbTab(tab) {
+  document.getElementById('sbTabCartera').classList.toggle('active', tab === 'cartera');
+  document.getElementById('sbTabSeguimiento').classList.toggle('active', tab === 'seguimiento');
+  document.getElementById('sbCartera').classList.toggle('active', tab === 'cartera');
+  document.getElementById('sbSeguimiento').classList.toggle('active', tab === 'seguimiento');
+}
+
 function toggleWatchlist() {
-  wlOpen = !wlOpen;
-  document.getElementById('wlBody').classList.toggle('open', wlOpen);
-  document.getElementById('wlToggle').classList.toggle('open', wlOpen);
+  switchSbTab('seguimiento');
 }
 
 async function addWatchItem() {

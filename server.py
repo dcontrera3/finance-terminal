@@ -35,17 +35,26 @@ except ImportError:
     install("anthropic")
     import anthropic
 
+try:
+    import jwt as pyjwt
+except ImportError:
+    install("PyJWT")
+    import jwt as pyjwt
+
 import math
 import os
 import requests as http
 from datetime import datetime
+from functools import wraps
 
 app = Flask(__name__)
 CORS(app)  # Permite requests desde el HTML abierto localmente
 
 # ── Supabase config ──
-SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
+SUPABASE_URL        = os.environ.get('SUPABASE_URL', '').rstrip('/')
+SUPABASE_KEY        = os.environ.get('SUPABASE_KEY', '')
+SUPABASE_ANON_KEY   = os.environ.get('SUPABASE_ANON_KEY', SUPABASE_KEY)
+SUPABASE_JWT_SECRET = os.environ.get('SUPABASE_JWT_SECRET', '')
 
 def sb_headers():
     return {
@@ -53,6 +62,31 @@ def sb_headers():
         'Authorization': f'Bearer {SUPABASE_KEY}',
         'Content-Type': 'application/json',
     }
+
+# ── Auth ──
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not SUPABASE_JWT_SECRET:
+            request.user_id = 'anon'
+            return f(*args, **kwargs)
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'No autorizado'}), 401
+        token = auth_header[7:]
+        try:
+            payload = pyjwt.decode(
+                token, SUPABASE_JWT_SECRET,
+                algorithms=['HS256'],
+                options={"verify_aud": False}
+            )
+            request.user_id = payload.get('sub', 'unknown')
+        except pyjwt.ExpiredSignatureError:
+            return jsonify({'error': 'Sesión expirada'}), 401
+        except pyjwt.InvalidTokenError:
+            return jsonify({'error': 'Token inválido'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 INTERVAL_MAP = {
     "1D":  ("1d",  "6mo"),
@@ -69,7 +103,15 @@ def clean(val):
         return round(float(val), 4)
     except: return None
 
+@app.route("/config")
+def config():
+    return jsonify({
+        "supabase_url":      SUPABASE_URL,
+        "supabase_anon_key": SUPABASE_ANON_KEY,
+    })
+
 @app.route("/quote/<ticker>")
+@require_auth
 def quote(ticker):
     tf = request.args.get("tf", "1M")
     interval, period = INTERVAL_MAP.get(tf, ("1mo", "5y"))
@@ -126,6 +168,7 @@ def quote(ticker):
         return jsonify({"error": str(e)}), 500
 
 @app.route("/price/<ticker>")
+@require_auth
 def price(ticker):
     """Precio real-time vía fast_info — sin caché de histórico."""
     try:
@@ -138,6 +181,7 @@ def price(ticker):
         return jsonify({"error": str(e)}), 500
 
 @app.route("/news/<ticker>")
+@require_auth
 def news(ticker):
     try:
         from datetime import date as date_cls
@@ -207,6 +251,7 @@ def news(ticker):
 
 
 @app.route("/advice", methods=["POST"])
+@require_auth
 def advice():
     try:
         d = request.json
@@ -290,27 +335,42 @@ CONFIANZA: [X/10]
 
 
 @app.route("/sync", methods=["GET"])
+@require_auth
 def sync_get():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return jsonify({}), 200
     try:
-        r = http.get(f'{SUPABASE_URL}/rest/v1/app_data', headers=sb_headers(), timeout=5)
+        uid    = request.user_id
+        prefix = f'{uid}:'
+        r      = http.get(
+            f'{SUPABASE_URL}/rest/v1/app_data',
+            headers=sb_headers(),
+            params={'key': f'like.{prefix}%'},
+            timeout=5
+        )
         rows = r.json()
-        return jsonify({row['key']: row['value'] for row in rows if 'key' in row})
+        return jsonify({
+            row['key'][len(prefix):]: row['value']
+            for row in rows
+            if isinstance(row, dict) and row.get('key', '').startswith(prefix)
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route("/sync", methods=["POST"])
+@require_auth
 def sync_post():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return jsonify({'ok': False}), 200
     try:
-        data = request.json
-        headers = {**sb_headers(), 'Prefer': 'resolution=merge-duplicates,return=minimal'}
+        data       = request.json
+        uid        = request.user_id
+        actual_key = f'{uid}:{data["key"]}'
+        headers    = {**sb_headers(), 'Prefer': 'resolution=merge-duplicates,return=minimal'}
         http.post(
             f'{SUPABASE_URL}/rest/v1/app_data',
             headers=headers,
-            json={'key': data['key'], 'value': data['value'], 'updated_at': datetime.utcnow().isoformat()},
+            json={'key': actual_key, 'value': data['value'], 'updated_at': datetime.utcnow().isoformat()},
             timeout=5
         )
         return jsonify({'ok': True})
