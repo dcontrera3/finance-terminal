@@ -786,13 +786,17 @@ async function initAuth() {
 
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
-      // Refrescar siempre para asegurarse de que el token no esté expirado
       const { data: fresh } = await supabaseClient.auth.refreshSession();
-      authToken = (fresh?.session ?? session).access_token;
-      hideAuthOverlay();
-      initApp();
+      if (fresh?.session) {
+        authToken = fresh.session.access_token;
+        hideAuthOverlay();
+        initApp();
+      } else {
+        // Refresh falló (sesión vencida) → limpiar y pedir login
+        await supabaseClient.auth.signOut();
+      }
     }
-    // Si no hay sesión, el overlay queda visible
+    // Sin sesión válida el overlay queda visible
 
     supabaseClient.auth.onAuthStateChange((event, session) => {
       if (session) {
