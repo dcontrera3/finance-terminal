@@ -452,6 +452,7 @@ canvas{display:block;}
 .ind-section-title.ind-off::before{color:var(--muted);}
 .ind-section-title.ind-off{opacity:0.45;}
 .fibo-dot{width:8px;height:3px;border-radius:1px;display:inline-block;}
+#mainChart.fibo-selecting{cursor:crosshair!important;}
 
 /* ── AUTH OVERLAY ── */
 #authOverlay{position:fixed;inset:0;z-index:10000;background:var(--bg0);display:flex;align-items:center;justify-content:center;}
@@ -891,8 +892,10 @@ const indicatorState = {
   ema20: true, ema50: true, ema200: true,
   bb: true, vol: true, rsi: true, macd: true, fibo: false
 };
-let lastFiboData = null; // { hi, lo, levels[] }
-let lastRpArgs   = null; // últimos args de renderRightPanel para re-render al toggle
+let lastFiboData   = null; // { hi, lo, levels[] }
+let lastRpArgs     = null; // últimos args de renderRightPanel para re-render al toggle
+let fiboPoints     = null; // { p1, p2 } — precios seleccionados por el usuario
+let fiboSelecting  = 0;   // 0=inactivo, 1=esperando p1, 2=esperando p2
 
 const DEFAULT_PORTFOLIO = [
   {ticker:'NVDA', name:'NVIDIA Corp.',       usd:1546, color:'#00e5ff'},
@@ -1084,8 +1087,8 @@ function pivots(h, l, c) {
   };
 }
 
-function fiboCalc(highs, lows) {
-  const hi = Math.max(...highs), lo = Math.min(...lows), diff = hi - lo;
+function fiboCalc(hiPrice, loPrice) {
+  const hi = Math.max(hiPrice, loPrice), lo = Math.min(hiPrice, loPrice), diff = hi - lo;
   const ratios = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
   const colors = ['#9e9e9e','#ffd600','#00d4ff','#9e9e9e','#00e676','#ea80fc','#9e9e9e'];
   return { hi, lo, levels: ratios.map((r, i) => ({ ratio: r, price: hi - diff * r, color: colors[i] })) };
@@ -1371,12 +1374,22 @@ function renderRightPanel(fc, fh, fl, fv, realtimePrice) {
     <div class="rps-t ind-section-title ${indicatorState.fibo?'':'ind-off'}" data-toggle="fibo" style="cursor:pointer">
       FIBONACCI<button class="info-btn" onclick="event.stopPropagation();showInfoPopup('fibonacci',this)">!</button>
     </div>
-    ${indicatorState.fibo && fiboLevels.length ? fiboLevels.map(lvl=>`
+    ${!indicatorState.fibo
+      ? `<div style="color:var(--muted);font-size:.62rem;padding:2px 0">Click para activar</div>`
+      : fiboSelecting === 1
+        ? `<div style="color:var(--yellow);font-size:.62rem;padding:4px 0;line-height:1.4">Hacé click en el gráfico para marcar el punto ALTO</div>`
+        : fiboSelecting === 2
+          ? `<div style="color:var(--muted);font-size:.62rem;padding:2px 0">Punto alto: <span style="color:var(--yellow)">${fmt(fiboPoints.p1)}</span></div>
+             <div style="color:var(--cyan);font-size:.62rem;padding:4px 0;line-height:1.4">Ahora marcá el punto BAJO</div>`
+          : fiboLevels.length ? `${fiboLevels.map(lvl=>`
     <div class="rr">
       <span class="rl"><span class="fibo-dot" style="background:${lvl.color}"></span> ${(lvl.ratio*100).toFixed(1)}%</span>
       <span class="rv" style="color:${lvl.color}">${fmt(lvl.price)}</span>
-    </div>`).join('')
-    : `<div style="color:var(--muted);font-size:.62rem;padding:2px 0">Click para activar</div>`}
+    </div>`).join('')}
+    <div style="padding:4px 0 2px">
+      <button onclick="startFiboSelection()" style="width:100%;padding:3px;font-size:.6rem;font-family:'Space Mono',monospace;background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.25);color:var(--cyan);border-radius:3px;cursor:pointer">Cambiar rango</button>
+    </div>` : `<div style="color:var(--muted);font-size:.62rem;padding:2px 0">Cargando...</div>`
+    }
   </div>
   <div style="padding:9px 11px 4px">
     <div class="rps-t">SEÑAL GLOBAL<button class="info-btn" onclick="showInfoPopup('señal',this)">!</button></div>
@@ -1424,10 +1437,43 @@ function applyIndicatorState() {
 }
 
 function toggleIndicator(key) {
-  indicatorState[key] = !indicatorState[key];
+  if (key === 'fibo') {
+    indicatorState.fibo = !indicatorState.fibo;
+    if (indicatorState.fibo && !fiboPoints) {
+      // Activamos fibo sin rango previo: pedir selección
+      fiboSelecting = 1;
+      document.getElementById('mainChart').classList.add('fibo-selecting');
+    } else if (!indicatorState.fibo) {
+      fiboSelecting = 0;
+      document.getElementById('mainChart').classList.remove('fibo-selecting');
+    }
+  } else {
+    indicatorState[key] = !indicatorState[key];
+  }
   applyIndicatorState();
-  // Re-render solo el panel derecho para actualizar resaltados
   if (lastRpArgs) renderRightPanel(...lastRpArgs);
+}
+
+function startFiboSelection() {
+  indicatorState.fibo = true;
+  fiboSelecting = 1;
+  fiboPoints = null;
+  document.getElementById('mainChart').classList.add('fibo-selecting');
+  applyIndicatorState();
+  if (lastRpArgs) renderRightPanel(...lastRpArgs);
+}
+
+function updateFiboDatasets() {
+  if (!mainChart || !lastFiboData) return;
+  const ds = mainChart.data.datasets;
+  const labels = mainChart.data.labels;
+  if (!labels || !labels.length) return;
+  const t0 = labels[0], t1 = labels[labels.length - 1];
+  lastFiboData.levels.forEach((lvl, i) => {
+    const idx = 8 + i;
+    if (ds[idx]) ds[idx].data = [{x: t0, y: lvl.price}, {x: t1, y: lvl.price}];
+  });
+  mainChart.update('none');
 }
 
 // ══════════════════════════════════════════
@@ -1489,7 +1535,9 @@ function buildCharts(marketData) {
   document.getElementById('stV').textContent=fmtV(fv[n-1]);
   document.getElementById('stA').textContent=fmt(atrV);
   renderSidebar(); renderTabs(); updateActive();
-  lastFiboData = fiboCalc(fh, fl); // antes de renderRightPanel para que esté disponible
+  lastFiboData = fiboPoints
+    ? fiboCalc(fiboPoints.p1, fiboPoints.p2)
+    : fiboCalc(Math.max(...fh), Math.min(...fl)); // antes de renderRightPanel
   renderRightPanel(fc,fh,fl,fv,displayPrice);
 
   // Guardamos indicadores para el análisis IA
@@ -1686,6 +1734,26 @@ document.getElementById('rPanel').addEventListener('click', e => {
   if (!row) return;
   e.stopPropagation();
   toggleIndicator(row.dataset.toggle);
+});
+
+// ══════════════════════════════════════════
+// FIBONACCI — canvas click para selección de rango
+// ══════════════════════════════════════════
+document.getElementById('mainChart').addEventListener('click', e => {
+  if (!fiboSelecting || !mainChart) return;
+  const price = mainChart.scales.y.getValueForPixel(e.offsetY);
+  if (fiboSelecting === 1) {
+    fiboPoints = { p1: price, p2: null };
+    fiboSelecting = 2;
+    if (lastRpArgs) renderRightPanel(...lastRpArgs);
+  } else if (fiboSelecting === 2) {
+    fiboPoints.p2 = price;
+    fiboSelecting = 0;
+    document.getElementById('mainChart').classList.remove('fibo-selecting');
+    lastFiboData = fiboCalc(fiboPoints.p1, fiboPoints.p2);
+    updateFiboDatasets();
+    if (lastRpArgs) renderRightPanel(...lastRpArgs);
+  }
 });
 
 // ══════════════════════════════════════════
