@@ -35,16 +35,11 @@ except ImportError:
     install("anthropic")
     import anthropic
 
-try:
-    import jwt as pyjwt
-except ImportError:
-    install("PyJWT")
-    import jwt as pyjwt
 
 import math
 import os
 import requests as http
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 app = Flask(__name__)
@@ -63,28 +58,46 @@ def sb_headers():
         'Content-Type': 'application/json',
     }
 
-# ── Auth ──
+# ── Auth — validación via Supabase API con caché de 5 min ──
+_auth_cache = {}  # token_prefix -> (user_id, expires_at)
+
+def _validate_token(token):
+    """Valida el token contra la API de Supabase. Cachea el resultado 5 min."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return 'anon'
+    cache_key = token[:32]  # primeros 32 chars como clave
+    cached = _auth_cache.get(cache_key)
+    if cached:
+        user_id, expires_at = cached
+        if datetime.utcnow() < expires_at:
+            return user_id
+    try:
+        r = http.get(
+            f'{SUPABASE_URL}/auth/v1/user',
+            headers={'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {token}'},
+            timeout=5
+        )
+        if r.status_code == 200:
+            user_id = r.json().get('id', 'unknown')
+            _auth_cache[cache_key] = (user_id, datetime.utcnow() + timedelta(minutes=5))
+            return user_id
+    except Exception:
+        pass
+    return None
+
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not SUPABASE_JWT_SECRET:
+        if not SUPABASE_URL or not SUPABASE_KEY:
             request.user_id = 'anon'
             return f(*args, **kwargs)
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
             return jsonify({'error': 'No autorizado'}), 401
-        token = auth_header[7:]
-        try:
-            payload = pyjwt.decode(
-                token, SUPABASE_JWT_SECRET,
-                algorithms=['HS256'],
-                options={"verify_aud": False}
-            )
-            request.user_id = payload.get('sub', 'unknown')
-        except pyjwt.ExpiredSignatureError:
-            return jsonify({'error': 'Sesión expirada'}), 401
-        except pyjwt.InvalidTokenError:
-            return jsonify({'error': 'Token inválido'}), 401
+        user_id = _validate_token(auth_header[7:])
+        if not user_id:
+            return jsonify({'error': 'No autorizado'}), 401
+        request.user_id = user_id
         return f(*args, **kwargs)
     return decorated
 
