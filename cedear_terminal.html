@@ -752,13 +752,25 @@ const API = window.location.protocol === 'file:' ? 'http://localhost:5000' : win
 let supabaseClient = null;
 let authToken      = null;
 
-// Patch fetch global: incluye Bearer token en todas las llamadas a la API
+// Patch fetch global: incluye Bearer token y maneja renovación automática en 401
 const _rawFetch = window.fetch.bind(window);
 window.fetch = async function(url, opts = {}) {
   if (typeof url === 'string' && url.startsWith(API) && authToken) {
     opts = { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${authToken}` } };
   }
-  return _rawFetch(url, opts);
+  const res = await _rawFetch(url, opts);
+  // Si el token expiró, renovar y reintentar una vez
+  if (res.status === 401 && supabaseClient) {
+    const { data } = await supabaseClient.auth.refreshSession();
+    if (data?.session) {
+      authToken = data.session.access_token;
+      const retryOpts = { ...opts, headers: { ...(opts.headers || {}), 'Authorization': `Bearer ${authToken}` } };
+      return _rawFetch(url, retryOpts);
+    }
+    authToken = null;
+    showAuthOverlay();
+  }
+  return res;
 };
 
 async function initAuth() {
@@ -774,17 +786,18 @@ async function initAuth() {
 
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
-      authToken = session.access_token;
+      // Refrescar siempre para asegurarse de que el token no esté expirado
+      const { data: fresh } = await supabaseClient.auth.refreshSession();
+      authToken = (fresh?.session ?? session).access_token;
       hideAuthOverlay();
       initApp();
-    } else {
-      // overlay already visible
     }
+    // Si no hay sesión, el overlay queda visible
 
     supabaseClient.auth.onAuthStateChange((event, session) => {
       if (session) {
         authToken = session.access_token;
-      } else {
+      } else if (event === 'SIGNED_OUT') {
         authToken = null;
         showAuthOverlay();
       }
