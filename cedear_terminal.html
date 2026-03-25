@@ -75,7 +75,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
   cursor:pointer;transition:all .15s;}
 .sb-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
 .sb-tab:hover:not(.active){color:var(--text);}
-.sb-panel{display:none;flex-direction:column;flex:1;overflow:hidden;}
+.sb-panel{display:none;flex-direction:column;flex:1;overflow:hidden;overflow-x:hidden;}
 .sb-panel.active{display:flex;}
 .port-list{overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
 .pi{padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;
@@ -379,7 +379,7 @@ canvas{display:block;}
 /* ── MOBILE NAV ── */
 .mob-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:200;
   background:var(--bg1);border-top:1px solid var(--border);
-  display:flex;height:56px;flex-shrink:0;}
+  height:56px;flex-shrink:0;}
 .mob-tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:3px;cursor:pointer;color:var(--muted);font-size:.48rem;letter-spacing:1px;
   font-family:'Space Mono',monospace;transition:color .15s;border:none;background:transparent;}
@@ -1825,7 +1825,6 @@ function initApp() {
     renderSidebar();
     renderTabs();
     renderWatchlist();
-    if (watchlist.length > 0) toggleWatchlist();
     loadAllPrices();
     loadChart();
   });
