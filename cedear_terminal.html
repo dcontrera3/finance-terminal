@@ -662,6 +662,18 @@ canvas{display:block;}
         <div id="allocBars"></div>
         <div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
           <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:3px">
+            <span style="color:var(--muted)">Invertido</span>
+            <span style="color:var(--muted);font-family:'Space Mono',monospace">$<span id="capitalInvertidoVal">--</span></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:3px">
+            <span style="color:var(--muted)">Valor actual</span>
+            <span style="color:var(--text);font-family:'Space Mono',monospace">$<span id="valorActualVal">--</span></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.6rem;margin-bottom:5px;padding:4px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+            <span style="color:var(--muted)">P&amp;L total</span>
+            <span id="totalPnlVal" style="font-family:'Space Mono',monospace;font-weight:700">--</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:.58rem;margin-bottom:3px">
             <span style="color:var(--muted)">Total cartera</span>
             <span id="totalValDisplay" style="color:var(--accent);font-family:'Space Mono',monospace;cursor:pointer;border-bottom:1px dashed var(--border2)" title="Click para editar">$<span id="totalVal">--</span></span>
           </div>
@@ -977,14 +989,22 @@ function saveTotal(v) {
   syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal });
 }
 
-// Asegura que cada item tenga qty calculado al precio actual
-function ensureQtys() {
+// Migra y mantiene avgPrice como ancla del P&L.
+// avgPrice = precio promedio de compra (fijo). qty = usd / avgPrice (derivado).
+function ensureAvgPrice() {
   let changed = false;
   PORTFOLIO.forEach(p => {
-    if (!p.qty) {
-      const price = priceCache[p.ticker]?.price;
-      if (price) { p.qty = p.usd / price; changed = true; }
+    if (!p.avgPrice) {
+      if (p.qty && p.usd && p.qty > 0) {
+        p.avgPrice = p.usd / p.qty;        // migrar desde qty existente
+      } else {
+        const price = priceCache[p.ticker]?.price;
+        if (price) { p.avgPrice = price; }
+      }
+      changed = true;
     }
+    // qty siempre derivado de avgPrice (nunca del precio actual)
+    if (p.avgPrice && p.usd) p.qty = p.usd / p.avgPrice;
   });
   if (changed) savePortfolio();
 }
@@ -1138,16 +1158,19 @@ function renderSidebar() {
     const chg = c?.chg ?? null;
     const cc  = chg == null ? 'var(--muted)' : chg >= 0 ? 'var(--green)' : 'var(--red)';
     const cs  = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
-    const pct     = pcts[idx];
-    const curVal  = currentValue(item);
-    const qty     = item.qty;
-    const qtyStr  = qty != null ? qty.toFixed(2) + ' CP' : '···';
-    // Ganancia/pérdida vs monto invertido original
-    const pnlUSD  = item.usd ? curVal - item.usd : null;
-    const pnlPct  = item.usd ? (curVal - item.usd) / item.usd * 100 : null;
+    const pct      = pcts[idx];
+    const curVal   = currentValue(item);
+    const qty      = item.qty;
+    const qtyStr   = qty != null ? qty.toFixed(2) + ' acc' : '···';
+    const avgPrice = item.avgPrice;
+    const avgStr   = avgPrice ? '$' + avgPrice.toFixed(2) : '···';
+    // P&L basado en avgPrice (ancla fija), no en usd vs valor actual
+    const pnlUSD   = (avgPrice && qty && c?.price) ? (c.price - avgPrice) * qty : null;
+    const pnlPct   = (avgPrice && pnlUSD != null) ? (c.price - avgPrice) / avgPrice * 100 : null;
     const pnlColor = pnlUSD == null ? 'var(--muted)' : pnlUSD >= 0 ? 'var(--green)' : 'var(--red)';
-    const pnlStr  = pnlUSD != null
-      ? `${pnlUSD >= 0 ? '+' : ''}$${pnlUSD.toFixed(0)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)`
+    const pnlSign  = pnlUSD != null ? (pnlUSD >= 0 ? '+' : '') : '';
+    const pnlStr   = pnlUSD != null
+      ? `${pnlSign}$${Math.abs(pnlUSD).toFixed(0)} (${pnlSign}${pnlPct.toFixed(1)}%)`
       : '';
 
     const el = document.createElement('div');
@@ -1163,24 +1186,26 @@ function renderSidebar() {
         <span class="pi-nm">${item.name}</span>
         <span class="pi-ch" style="color:${cc}">${cs}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
-        <span style="font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;color:var(--text)">
+      <div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">
+        <span style="font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;color:var(--text)">
           $${curVal.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}
         </span>
-        ${pnlStr ? `<span style="font-size:.54rem;color:${pnlColor};margin-left:2px">${pnlStr}</span>` : ''}
+        <span style="font-size:.6rem;font-family:'Space Mono',monospace;font-weight:700;color:${pnlColor}">
+          ${pnlStr || '···'}
+        </span>
         <span class="pi-remove" title="Eliminar posición" style="margin-left:auto">✕</span>
       </div>
       <div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">
-        <span style="font-size:.52rem;color:var(--muted)">Invertido:</span>
-        <span class="pi-usd-val" style="font-family:'Space Mono',monospace;font-size:.58rem;
-          cursor:pointer;border-bottom:1px dashed var(--border2);color:var(--muted)">$${(item.usd||0).toLocaleString('en-US')}</span>
+        <span style="font-size:.52rem;color:var(--muted)">Entrada</span>
+        <span class="pi-avg-val" style="font-family:'Space Mono',monospace;font-size:.58rem;
+          cursor:pointer;border-bottom:1px dashed var(--border2);color:var(--muted)">${avgStr}</span>
         <span style="font-size:.52rem;color:var(--muted);margin-left:auto">${qtyStr}</span>
       </div>
       <div class="pi-bar"><div class="pi-bar-fill" style="width:${Math.min(pct * 3, 100)}%;background:${item.color}"></div></div>
       <div class="pi-pct">${pct.toFixed(1)}% cartera</div>`;
 
     el.addEventListener('click', e => {
-      if (e.target.classList.contains('pi-usd-val') || e.target.classList.contains('pi-remove') || e.target.classList.contains('pi-news-btn')) return;
+      if (e.target.classList.contains('pi-avg-val') || e.target.classList.contains('pi-remove') || e.target.classList.contains('pi-news-btn')) return;
       currentTicker = item.ticker; loadChart(); updateActive();
     });
 
@@ -1190,21 +1215,20 @@ function renderSidebar() {
       openNews(item.ticker);
     });
 
-    // Editar monto USD invertido → recalcula qty
-    el.querySelector('.pi-usd-val').addEventListener('click', e => {
+    // Editar precio promedio de entrada → recalcula qty, P&L se recalcula automático
+    el.querySelector('.pi-avg-val').addEventListener('click', e => {
       e.stopPropagation();
       const span = e.target;
       const inp = document.createElement('input');
-      inp.type = 'number'; inp.value = item.usd || 0; inp.min = '0'; inp.step = 'any';
-      inp.style.cssText = 'width:75px;background:var(--bg2);border:1px solid var(--accent);border-radius:2px;color:var(--text);font-family:Space Mono,monospace;font-size:.58rem;padding:0 4px;outline:none';
+      inp.type = 'number'; inp.value = item.avgPrice ? item.avgPrice.toFixed(2) : ''; inp.min = '0.01'; inp.step = 'any';
+      inp.style.cssText = 'width:70px;background:var(--bg2);border:1px solid var(--accent);border-radius:2px;color:var(--text);font-family:Space Mono,monospace;font-size:.58rem;padding:0 4px;outline:none';
       span.replaceWith(inp);
       inp.focus(); inp.select();
       const save = () => {
         const v = parseFloat(inp.value);
-        if (v >= 0) {
-          PORTFOLIO[idx].usd = v;
-          const price = priceCache[item.ticker]?.price;
-          if (price) PORTFOLIO[idx].qty = v / price; // recalcular qty al precio actual
+        if (v > 0) {
+          PORTFOLIO[idx].avgPrice = v;
+          PORTFOLIO[idx].qty = (PORTFOLIO[idx].usd || 0) / v;
           savePortfolio();
         }
         renderSidebar();
@@ -1233,7 +1257,7 @@ function renderSidebar() {
     bars.appendChild(br);
   });
 
-  const totalActual = totalCarteraActual();
+  const totalActual  = totalCarteraActual();
   const tvEl = document.getElementById('totalVal');
   if (tvEl) tvEl.textContent = totalActual.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
 
@@ -1243,6 +1267,23 @@ function renderSidebar() {
   const pEl = document.getElementById('liquidityPct');
   if (lEl) lEl.textContent = liquidity.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
   if (pEl) pEl.textContent = liqPct.toFixed(1) + '%';
+
+  // P&L total: suma de (precio actual - avgPrice) * qty por posición
+  const totalInv = capitalInvertido();
+  const totalMkt = totalPortfolioValue();
+  const tPnl     = totalMkt - totalInv;
+  const tPnlPct  = totalInv > 0 ? tPnl / totalInv * 100 : 0;
+  const tPnlColor = tPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  const tPnlSign  = tPnl >= 0 ? '+' : '';
+  const pnlEl = document.getElementById('totalPnlVal');
+  const ciEl  = document.getElementById('capitalInvertidoVal');
+  const vaEl  = document.getElementById('valorActualVal');
+  if (pnlEl) {
+    pnlEl.textContent = `${tPnlSign}$${Math.abs(tPnl).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})} (${tPnlSign}${tPnlPct.toFixed(1)}%)`;
+    pnlEl.style.color = tPnlColor;
+  }
+  if (ciEl) ciEl.textContent = totalInv.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+  if (vaEl) vaEl.textContent = totalMkt.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
 }
 
 function renderTabs() {
@@ -1794,7 +1835,7 @@ async function loadAllPrices() {
     }
   });
   savePriceCache();
-  ensureQtys();
+  ensureAvgPrice();
   renderSidebar(); renderTabs(); updateActive(); renderWatchlist();
 }
 
@@ -2160,8 +2201,9 @@ async function addPortfolioItem() {
 
   const usedColors = PORTFOLIO.map(p => p.color);
   const color = PALETTE.find(c => !usedColors.includes(c)) || PALETTE[PORTFOLIO.length % PALETTE.length];
-  const qtyNew = priceCache[ticker]?.price ? usd / priceCache[ticker].price : null;
-  PORTFOLIO.push({ ticker, name: ticker, usd, qty: qtyNew, color });
+  const entryPrice = priceCache[ticker]?.price || null;
+  const qtyNew     = entryPrice ? usd / entryPrice : null;
+  PORTFOLIO.push({ ticker, name: ticker, usd, qty: qtyNew, avgPrice: entryPrice, color });
   savePortfolio();
   document.getElementById('newTicker').value = '';
   document.getElementById('newShares').value = '';
