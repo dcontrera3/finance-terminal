@@ -2477,8 +2477,8 @@ function toggleAddForm() {
 async function addPortfolioItem() {
   const ticker = document.getElementById('newTicker').value.trim().toUpperCase();
   const usd = parseFloat(document.getElementById('newShares').value);
-  if (!ticker || !usd || usd <= 0) { alert('Ingresá un ticker y un monto en USD válido.'); return; }
-  if (PORTFOLIO.find(p => p.ticker === ticker)) { alert(`${ticker} ya está en la cartera.`); return; }
+  if (!ticker || !usd || usd <= 0) { showToast('Ingresá un ticker y un monto en USD válido.', 'err'); return; }
+  if (PORTFOLIO.find(p => p.ticker === ticker)) { showToast(`${ticker} ya está en la cartera.`, 'err'); return; }
 
   const btn = document.querySelector('.sb-ok');
   btn.textContent = '...'; btn.disabled = true;
@@ -2487,7 +2487,7 @@ async function addPortfolioItem() {
     priceCache[ticker] = { price: d.current_price, chg: d.change_pct };
   } catch {
     btn.textContent = 'AGREGAR'; btn.disabled = false;
-    alert(`No se encontraron datos para "${ticker}". Verificá el ticker.`); return;
+    showToast(`No se encontraron datos para "${ticker}". Verificá el ticker.`, 'err'); return;
   }
   btn.textContent = 'AGREGAR'; btn.disabled = false;
 
@@ -2872,7 +2872,7 @@ function cashSimPosition(id) {
   if (idx === -1) return;
   const p = simPositions[idx];
   const cur = priceCache[p.ticker]?.price ?? null;
-  if (cur == null) { alert('Sin precio actual para cerrar la posición.'); return; }
+  if (cur == null) { showToast('Sin precio actual para cerrar la posición.', 'err'); return; }
   const pnl    = p.dir === 'LONG' ? (cur - p.entry) * p.qty : (p.entry - cur) * p.qty;
   const pnlPct = p.dir === 'LONG' ? (cur - p.entry) / p.entry * 100 : (p.entry - cur) / p.entry * 100;
   simAccumulatedPnl += pnl;
@@ -2900,7 +2900,7 @@ async function addSimPosition() {
   const qty   = parseFloat(document.getElementById('simQty').value);
   const entry = parseFloat(document.getElementById('simEntry').value);
   if (!tk || !qty || !entry || qty <= 0 || entry <= 0) {
-    alert('Completá todos los campos con valores válidos.'); return;
+    showToast('Completá todos los campos con valores válidos.', 'err'); return;
   }
   // Fetch current price if not cached
   let price = priceCache[tk]?.price ?? null;

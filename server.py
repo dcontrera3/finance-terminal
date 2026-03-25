@@ -58,6 +58,28 @@ def sb_headers():
         'Content-Type': 'application/json',
     }
 
+# ── Data cache — evita requests redundantes a Yahoo Finance ──
+_data_cache = {}  # key -> (payload, expires_at)
+
+def _cache_get(key):
+    entry = _data_cache.get(key)
+    if not entry:
+        return None
+    payload, expires_at = entry
+    if datetime.utcnow() < expires_at:
+        return payload
+    del _data_cache[key]
+    return None
+
+def _cache_set(key, payload, ttl_seconds):
+    # Evict entradas antiguas si el cache crece demasiado
+    if len(_data_cache) > 500:
+        now = datetime.utcnow()
+        expired = [k for k, (_, exp) in _data_cache.items() if now >= exp]
+        for k in expired:
+            del _data_cache[k]
+    _data_cache[key] = (payload, datetime.utcnow() + timedelta(seconds=ttl_seconds))
+
 # ── Auth — validación via Supabase API con caché de 5 min ──
 _auth_cache = {}  # token_prefix -> (user_id, expires_at)
 
@@ -128,6 +150,12 @@ def config():
 def quote(ticker):
     tf = request.args.get("tf", "1M")
     interval, period = INTERVAL_MAP.get(tf, ("1mo", "5y"))
+    # 1D más volátil → 90s. Timeframes largos cambian poco → 5 min.
+    ttl = 90 if tf == "1D" else 300
+    cache_key = f"quote:{ticker.upper()}:{tf}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return jsonify(cached)
 
     try:
         tk = yf.Ticker(ticker)
@@ -167,7 +195,7 @@ def quote(ticker):
             prev = rows[-2]["close"] if len(rows) > 1 else cur
             chg  = round((cur - prev) / prev * 100, 2) if cur and prev else 0
 
-        return jsonify({
+        result = {
             "ticker":        ticker.upper(),
             "current_price": cur,
             "change_pct":    chg,
@@ -175,7 +203,9 @@ def quote(ticker):
             "timeframe":     tf,
             "rows":          len(rows),
             "data":          rows,
-        })
+        }
+        _cache_set(cache_key, result, ttl_seconds=ttl)
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -183,19 +213,29 @@ def quote(ticker):
 @app.route("/price/<ticker>")
 @require_auth
 def price(ticker):
-    """Precio real-time vía fast_info — sin caché de histórico."""
+    """Precio real-time vía fast_info. Cache 15s para evitar requests duplicados del frontend."""
+    cache_key = f"price:{ticker.upper()}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return jsonify(cached)
     try:
         fi         = yf.Ticker(ticker).fast_info
         cur        = clean(fi.get('lastPrice') or fi.get('regularMarketPrice'))
         prev_close = clean(fi.get('previousClose') or fi.get('regularMarketPreviousClose'))
         chg        = round((cur - prev_close) / prev_close * 100, 2) if cur and prev_close else 0
-        return jsonify({"ticker": ticker.upper(), "current_price": cur, "change_pct": chg})
+        result     = {"ticker": ticker.upper(), "current_price": cur, "change_pct": chg}
+        _cache_set(cache_key, result, ttl_seconds=15)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/news/<ticker>")
 @require_auth
 def news(ticker):
+    cache_key = f"news:{ticker.upper()}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return jsonify(cached)
     try:
         from datetime import date as date_cls
         tk = yf.Ticker(ticker)
@@ -252,12 +292,14 @@ def news(ticker):
                 days_to_earnings = (ed_dt - date_cls.today()).days
         except: pass
 
-        return jsonify({
+        result = {
             'ticker':           ticker.upper(),
             'news':             news_items,
             'earnings_date':    earnings_date,
             'days_to_earnings': days_to_earnings,
-        })
+        }
+        _cache_set(cache_key, result, ttl_seconds=600)
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
