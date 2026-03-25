@@ -367,13 +367,13 @@ canvas{display:block;}
 .wl-btn.sim{border-color:rgba(171,71,188,0.4);color:#ce93d8;}
 .wl-btn.sim:hover{border-color:#ce93d8;background:rgba(171,71,188,0.08);}
 .wl-btn.del:hover{border-color:var(--red);color:var(--red);}
-.wl-add{padding:7px 12px;display:flex;gap:5px;}
-.wl-add input{flex:1;background:var(--bg2);border:1px solid var(--border2);border-radius:3px;
-  color:var(--text);font-family:'Space Mono',monospace;font-size:.62rem;padding:3px 7px;outline:none;}
+.wl-add{padding:7px 12px;display:flex;flex-direction:column;gap:5px;}
+.wl-add input{width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:3px;
+  color:var(--text);font-family:'Space Mono',monospace;font-size:.62rem;padding:3px 7px;outline:none;box-sizing:border-box;}
 .wl-add input:focus{border-color:var(--accent);}
-.wl-add-btn{padding:3px 8px;border-radius:3px;cursor:pointer;font-size:.6rem;
+.wl-add-btn{width:100%;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:.6rem;
   font-family:'Space Mono',monospace;border:1px solid rgba(0,212,255,0.4);
-  background:rgba(0,212,255,0.06);color:var(--accent);white-space:nowrap;}
+  background:rgba(0,212,255,0.06);color:var(--accent);text-align:left;}
 .wl-add-btn:hover{background:rgba(0,212,255,0.15);}
 
 /* ── MOBILE NAV ── */
