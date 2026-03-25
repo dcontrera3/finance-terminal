@@ -394,6 +394,18 @@ def sync_post():
 def health():
     return jsonify({"status": "ok", "server": "CEDEAR Terminal", "time": datetime.now().isoformat()})
 
+@app.route("/sw.js")
+def service_worker():
+    import os
+    sw_path = os.path.join(os.path.dirname(__file__), "sw.js")
+    if os.path.exists(sw_path):
+        with open(sw_path, "r", encoding="utf-8") as f:
+            return f.read(), 200, {
+                "Content-Type": "application/javascript; charset=utf-8",
+                "Service-Worker-Allowed": "/",
+            }
+    return "sw.js not found", 404
+
 @app.route("/manifest.json")
 def manifest():
     import os

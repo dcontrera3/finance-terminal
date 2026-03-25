@@ -1947,6 +1947,36 @@ function initApp() {
 }
 
 // ══════════════════════════════════════════
+// SERVICE WORKER
+// ══════════════════════════════════════════
+let swRegistration = null;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    swRegistration = reg;
+  }).catch(() => {});
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+
+function sendNativeNotif(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (swRegistration) {
+    swRegistration.showNotification(title, {
+      body, icon: '/favicon.ico', badge: '/favicon.ico',
+      tag: title, renotify: true,
+    });
+  } else {
+    new Notification(title, { body });
+  }
+}
+
+// ══════════════════════════════════════════
 // TOAST SYSTEM
 // ══════════════════════════════════════════
 function showToast(msg, type = 'info') {
@@ -2010,6 +2040,13 @@ function renderAlertModal(prefillTicker) {
         </div>
       </div>
       <button class="alert-add-btn" style="width:100%" onclick="addAlert()">+ AGREGAR ALERTA</button>
+      ${'Notification' in window && Notification.permission !== 'granted' ? `
+      <div style="margin-top:8px;padding:7px 10px;background:rgba(255,171,0,.06);border:1px solid rgba(255,171,0,.25);border-radius:4px;display:flex;align-items:center;gap:8px">
+        <span style="font-size:.58rem;color:#ffab00;flex:1">Activá las notificaciones para recibir alertas aunque la app esté en background.</span>
+        <button onclick="requestNotifPermission().then(()=>renderAlertModal(document.getElementById('alertTicker')?.value||currentTicker))"
+          style="padding:3px 8px;font-size:.55rem;font-family:'Space Mono',monospace;background:rgba(255,171,0,.12);border:1px solid #ffab00;color:#ffab00;border-radius:3px;cursor:pointer;white-space:nowrap">
+          Activar</button>
+      </div>` : ''}
     </div>
 
     ${active.length ? `<div>
@@ -2066,7 +2103,7 @@ function renderAlertModal(prefillTicker) {
   if (tkInput) tkInput.addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
 }
 
-function addAlert() {
+async function addAlert() {
   const ticker = (document.getElementById('alertTicker')?.value || '').trim().toUpperCase();
   const price  = parseFloat(document.getElementById('alertPrice')?.value);
   if (!ticker || !price || price <= 0) { showToast('Ingresá un ticker y precio válido.', 'err'); return; }
@@ -2077,6 +2114,8 @@ function addAlert() {
   });
   saveAlerts();
   updateAlertBadge();
+  // Pedir permiso la primera vez que se crea una alerta
+  if (Notification.permission === 'default') await requestNotifPermission();
   renderAlertModal(ticker);
 }
 
@@ -2107,7 +2146,9 @@ function checkAlerts() {
       a.triggeredAt = new Date().toISOString();
       changed = true;
       const sym = a.condition === 'above' ? '↑' : '↓';
-      showToast(`${sym} ${a.ticker} tocó $${price.toFixed(2)} — alerta ${a.condition === 'above' ? '>' : '<'} $${a.targetPrice.toFixed(2)}`, 'alert');
+      const msg = `${sym} ${a.ticker} tocó $${price.toFixed(2)} — alerta ${a.condition === 'above' ? '>' : '<'} $${a.targetPrice.toFixed(2)}`;
+      showToast(msg, 'alert');
+      sendNativeNotif('Finance Terminal', msg);
     }
   });
   if (changed) { saveAlerts(); updateAlertBadge(); }
