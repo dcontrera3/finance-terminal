@@ -23,11 +23,16 @@ except ImportError:
 try:
     from flask import Flask, jsonify, request
     from flask_cors import CORS
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
 except ImportError:
     install("flask")
     install("flask-cors")
+    install("flask-limiter")
     from flask import Flask, jsonify, request
     from flask_cors import CORS
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
 
 try:
     import anthropic
@@ -43,7 +48,15 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app)  # Permite requests desde el HTML abierto localmente
+CORS(app)
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["300 per minute"],
+    storage_uri="memory://",
+    on_breach=lambda limit: (jsonify({"error": "Demasiadas requests. Esperá un momento."}), 429),
+)
 
 # ── Supabase config ──
 SUPABASE_URL        = os.environ.get('SUPABASE_URL', '').rstrip('/')
@@ -138,6 +151,22 @@ def clean(val):
         return round(float(val), 4)
     except: return None
 
+def _get_sparkline(ticker):
+    """Últimos 7 cierres diarios. Cache 1 hora."""
+    cache_key = f"spark:{ticker.upper()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        hist = yf.Ticker(ticker).history(period='10d', interval='1d', auto_adjust=True)
+        closes = [clean(float(c)) for c in hist['Close'].tolist()
+                  if c == c and c is not None][-7:]
+        _cache_set(cache_key, closes, ttl_seconds=3600)
+        return closes
+    except:
+        _cache_set(cache_key, [], ttl_seconds=300)
+        return []
+
 @app.route("/config")
 def config():
     return jsonify({
@@ -146,6 +175,7 @@ def config():
     })
 
 @app.route("/quote/<ticker>")
+@limiter.limit("30 per minute")
 @require_auth
 def quote(ticker):
     tf = request.args.get("tf", "1M")
@@ -211,9 +241,10 @@ def quote(ticker):
         return jsonify({"error": str(e)}), 500
 
 @app.route("/price/<ticker>")
+@limiter.limit("120 per minute")
 @require_auth
 def price(ticker):
-    """Precio real-time vía fast_info. Cache 15s para evitar requests duplicados del frontend."""
+    """Precio real-time vía fast_info. Cache 15s. Incluye sparkline (7 cierres, cache 1h)."""
     cache_key = f"price:{ticker.upper()}"
     cached = _cache_get(cache_key)
     if cached:
@@ -223,13 +254,15 @@ def price(ticker):
         cur        = clean(fi.get('lastPrice') or fi.get('regularMarketPrice'))
         prev_close = clean(fi.get('previousClose') or fi.get('regularMarketPreviousClose'))
         chg        = round((cur - prev_close) / prev_close * 100, 2) if cur and prev_close else 0
-        result     = {"ticker": ticker.upper(), "current_price": cur, "change_pct": chg}
+        result     = {"ticker": ticker.upper(), "current_price": cur, "change_pct": chg,
+                      "spark": _get_sparkline(ticker)}
         _cache_set(cache_key, result, ttl_seconds=15)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/news/<ticker>")
+@limiter.limit("20 per minute")
 @require_auth
 def news(ticker):
     cache_key = f"news:{ticker.upper()}"
@@ -306,6 +339,7 @@ def news(ticker):
 
 
 @app.route("/advice", methods=["POST"])
+@limiter.limit("10 per minute")
 @require_auth
 def advice():
     try:

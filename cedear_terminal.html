@@ -833,6 +833,37 @@ canvas{display:block;}
 // ══════════════════════════════════════════
 const API = window.location.protocol === 'file:' ? 'http://localhost:5000' : window.location.origin;
 
+// ── Helpers de seguridad ──
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+function safeUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : '#';
+}
+
+// ── Sparkline SVG inline ──
+function renderSparkline(prices, w, h) {
+  w = w || 999; h = h || 22;
+  if (!prices || prices.length < 2) return '';
+  const valid = prices.filter(p => p != null && isFinite(p));
+  if (valid.length < 2) return '';
+  const min = Math.min(...valid), max = Math.max(...valid);
+  const range = max - min || min * 0.01 || 1;
+  const pts = valid.map((p, i) => {
+    const x = (i / (valid.length - 1)) * w;
+    const y = (h - 2) - ((p - min) / range) * (h - 4) + 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const up = valid[valid.length - 1] >= valid[0];
+  const color = up ? 'var(--green)' : 'var(--red)';
+  return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+    style="display:block;opacity:.7">
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.4"
+      stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
 // ══════════════════════════════════════════
 // AUTH — Supabase
 // ══════════════════════════════════════════
@@ -1275,6 +1306,7 @@ function renderSidebar() {
           cursor:pointer;border-bottom:1px dashed var(--border2);color:var(--muted)">${avgStr}</span>
         <span style="font-size:.52rem;color:var(--muted);margin-left:auto">${qtyStr}</span>
       </div>
+      ${c?.spark?.length > 1 ? `<div style="margin:3px 0 2px;height:22px">${renderSparkline(c.spark)}</div>` : ''}
       <div class="pi-bar"><div class="pi-bar-fill" style="width:${Math.min(pct * 3, 100)}%;background:${item.color}"></div></div>
       <div class="pi-pct">${pct.toFixed(1)}% cartera</div>`;
 
@@ -1883,9 +1915,13 @@ document.querySelectorAll('.tf-btn').forEach(btn => {
   });
 });
 
+let _resizeTimer = null;
 window.addEventListener('resize', () => {
-  resizeCanvases();
-  [mainChart,rsiChart,macdChart].forEach(c=>c&&c.resize());
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => {
+    resizeCanvases();
+    [mainChart,rsiChart,macdChart].forEach(c=>c&&c.resize());
+  }, 150);
 });
 
 // Carga precios 24h de todos los tickers en paralelo
@@ -1905,7 +1941,7 @@ async function loadAllPrices() {
   results.forEach((res, i) => {
     if (res.status === 'fulfilled') {
       const d = res.value;
-      priceCache[allTickers[i]] = { price: d.current_price, chg: d.change_pct };
+      priceCache[allTickers[i]] = { price: d.current_price, chg: d.change_pct, spark: d.spark || [] };
     }
   });
   savePriceCache();
@@ -2347,6 +2383,7 @@ function renderWatchlist() {
         <span class="wl-name">${w.name}</span>
         <span class="wl-chg" style="color:${cc}">${cs}</span>
       </div>
+      ${c?.spark?.length > 1 ? `<div style="height:18px;margin:2px 0">${renderSparkline(c.spark)}</div>` : ''}
       <div class="wl-actions">
         <button class="wl-btn" onclick="event.stopPropagation();openNews('${w.ticker}')">📰 NEWS</button>
         <button class="wl-btn sim" onclick="event.stopPropagation();watchToSim('${w.ticker}')">⚡ SIM</button>
@@ -2424,9 +2461,9 @@ function renderNewsModal(data) {
   if (data.news && data.news.length > 0) {
     html += `<div class="news-section-title">ÚLTIMAS NOTICIAS</div>`;
     data.news.forEach(item => {
-      html += `<div class="news-item" onclick="window.open('${item.link}','_blank')">
-        <div class="news-item-meta">${item.publisher} · ${item.date}</div>
-        <div class="news-item-title">${item.title}</div>
+      html += `<div class="news-item" onclick="window.open('${safeUrl(item.link)}','_blank')">
+        <div class="news-item-meta">${escHtml(item.publisher)} · ${escHtml(item.date)}</div>
+        <div class="news-item-title">${escHtml(item.title)}</div>
       </div>`;
     });
   } else {
