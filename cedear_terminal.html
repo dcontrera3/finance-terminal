@@ -454,6 +454,65 @@ canvas{display:block;}
 .fibo-dot{width:8px;height:3px;border-radius:1px;display:inline-block;}
 #mainChart.fibo-selecting{cursor:crosshair!important;}
 
+/* ── ALERTS ── */
+.alert-btn{padding:3px 9px;border-radius:3px;cursor:pointer;font-size:.62rem;
+  font-family:'Space Mono',monospace;border:1px solid rgba(255,171,0,0.4);
+  background:rgba(255,171,0,0.06);color:#ffab00;transition:all .15s;letter-spacing:1px;position:relative;}
+.alert-btn:hover{background:rgba(255,171,0,0.14);border-color:#ffab00;}
+.alert-badge{position:absolute;top:-5px;right:-5px;background:var(--red);color:#fff;
+  border-radius:50%;width:14px;height:14px;font-size:.44rem;display:flex;align-items:center;
+  justify-content:center;font-family:'Space Mono',monospace;font-weight:700;}
+.alert-overlay{position:fixed;inset:0;background:rgba(5,7,9,0.88);z-index:600;
+  display:none;align-items:center;justify-content:center;}
+.alert-overlay.open{display:flex;}
+.alert-modal{background:var(--bg1);border:1px solid rgba(255,171,0,0.28);border-radius:6px;
+  width:420px;max-width:96vw;max-height:85vh;display:flex;flex-direction:column;}
+.alert-head{padding:12px 16px;border-bottom:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0;}
+.alert-title{font-family:'Bebas Neue',sans-serif;font-size:1.1rem;letter-spacing:3px;color:#ffab00;}
+.alert-close{cursor:pointer;color:var(--muted);font-size:1.1rem;padding:2px 6px;
+  border:1px solid var(--border2);border-radius:3px;}
+.alert-close:hover{color:var(--text);}
+.alert-body{padding:14px 16px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:14px;}
+.alert-input{background:var(--bg2);border:1px solid var(--border2);border-radius:3px;
+  color:var(--text);font-family:'Space Mono',monospace;font-size:.68rem;padding:5px 8px;outline:none;width:100%;}
+.alert-input:focus{border-color:#ffab00;}
+.alert-cond{display:flex;gap:4px;}
+.alert-cond-btn{flex:1;padding:5px 8px;border-radius:3px;cursor:pointer;font-size:.62rem;
+  font-family:'Space Mono',monospace;border:1px solid var(--border2);background:var(--bg2);
+  color:var(--muted);transition:all .15s;}
+.alert-cond-btn.sel.above{background:rgba(0,230,118,.12);border-color:var(--green);color:var(--green);}
+.alert-cond-btn.sel.below{background:rgba(255,23,68,.12);border-color:var(--red);color:var(--red);}
+.alert-add-btn{padding:6px 14px;border-radius:3px;cursor:pointer;font-size:.62rem;
+  font-family:'Space Mono',monospace;border:1px solid #ffab00;
+  background:rgba(255,171,0,0.08);color:#ffab00;transition:all .15s;}
+.alert-add-btn:hover{background:rgba(255,171,0,0.18);}
+.alert-list-title{font-size:.52rem;letter-spacing:2px;color:var(--muted);font-family:'Space Mono',monospace;}
+.alert-item{display:flex;align-items:center;gap:8px;padding:8px 10px;
+  background:var(--bg2);border-radius:4px;border:1px solid var(--border);}
+.alert-item.triggered{opacity:.45;border-style:dashed;}
+.alert-item-info{flex:1;display:flex;flex-direction:column;gap:2px;}
+.alert-item-del{cursor:pointer;color:var(--muted);font-size:.7rem;padding:2px 6px;
+  border:1px solid var(--border2);border-radius:2px;background:transparent;flex-shrink:0;}
+.alert-item-del:hover{color:var(--red);border-color:var(--red);}
+.alert-empty{text-align:center;color:var(--muted);font-size:.63rem;padding:20px;
+  font-family:'Space Mono',monospace;letter-spacing:.5px;}
+
+/* ── TOASTS ── */
+#toastContainer{position:fixed;top:52px;right:14px;z-index:9000;
+  display:flex;flex-direction:column;gap:6px;pointer-events:none;}
+.toast{padding:10px 14px;border-radius:5px;font-size:.65rem;font-family:'Space Mono',monospace;
+  background:var(--bg1);border:1px solid var(--border2);color:var(--text);
+  pointer-events:all;display:flex;align-items:flex-start;gap:10px;
+  animation:toastIn .2s ease;max-width:300px;box-shadow:0 4px 20px rgba(0,0,0,.5);}
+.toast.t-alert{border-color:rgba(255,171,0,.5);background:rgba(255,171,0,.06);}
+.toast.t-ok{border-color:rgba(0,230,118,.4);background:rgba(0,230,118,.05);}
+.toast.t-err{border-color:rgba(255,23,68,.4);background:rgba(255,23,68,.05);}
+.toast-msg{flex:1;line-height:1.6;}
+.toast-x{cursor:pointer;color:var(--muted);font-size:.8rem;flex-shrink:0;margin-top:1px;}
+.toast-x:hover{color:var(--text);}
+@keyframes toastIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+
 /* ── AUTH OVERLAY ── */
 #authOverlay{position:fixed;inset:0;z-index:10000;background:var(--bg0);display:flex;align-items:center;justify-content:center;}
 .auth-card{width:340px;background:var(--bg1);border:1px solid var(--border2);border-radius:8px;padding:32px;display:flex;flex-direction:column;gap:18px;}
@@ -501,6 +560,20 @@ canvas{display:block;}
   </div>
 </div>
 
+<!-- TOAST CONTAINER -->
+<div id="toastContainer"></div>
+
+<!-- ALERT MODAL -->
+<div class="alert-overlay" id="alertOverlay" onclick="if(event.target===this)closeAlerts()">
+  <div class="alert-modal">
+    <div class="alert-head">
+      <div class="alert-title">🔔 Alertas de Precio</div>
+      <div class="alert-close" onclick="closeAlerts()">✕</div>
+    </div>
+    <div class="alert-body" id="alertBody"></div>
+  </div>
+</div>
+
 <!-- SERVER DOWN BANNER -->
 <div class="banner" id="banner">
   ⚠️ Servidor no detectado. Ejecutá: <code>python server.py</code> y recargá la página.
@@ -520,6 +593,7 @@ canvas{display:block;}
     <div class="live-dot" id="liveDot"></div>
     <span style="font-size:.6rem;color:var(--muted);font-family:'Space Mono',monospace" id="clock"></span>
     <button id="refreshBtn" onclick="manualRefresh()" style="background:transparent;border:1px solid var(--border2);border-radius:3px;color:var(--muted);cursor:pointer;font-size:.7rem;padding:2px 7px;transition:all .15s;line-height:1;" title="Actualizar precios">↻</button>
+    <button class="alert-btn" id="alertBtn" onclick="openAlerts()">🔔 ALERTAS<span class="alert-badge" id="alertBadge" style="display:none">0</span></button>
     <div class="sim-btn" onclick="openSim()">⚡ SIM</div>
     <button class="logout-btn" id="logoutBtn" onclick="doLogout()" style="display:none" title="Cerrar sesión">SALIR</button>
   </div>
@@ -1836,6 +1910,7 @@ async function loadAllPrices() {
   });
   savePriceCache();
   ensureAvgPrice();
+  checkAlerts();
   renderSidebar(); renderTabs(); updateActive(); renderWatchlist();
 }
 
@@ -1871,8 +1946,184 @@ function initApp() {
   });
 }
 
+// ══════════════════════════════════════════
+// TOAST SYSTEM
+// ══════════════════════════════════════════
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast t-${type}`;
+  toast.innerHTML = `<span class="toast-msg">${msg}</span><span class="toast-x" onclick="this.closest('.toast').remove()">✕</span>`;
+  container.appendChild(toast);
+  setTimeout(() => toast?.remove(), type === 'alert' ? 10000 : 4000);
+}
+
+// ══════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════
+let alerts = (() => {
+  try { return JSON.parse(localStorage.getItem('cedear_alerts') || '[]'); } catch { return []; }
+})();
+let alertCondition = 'above';
+
+function saveAlerts() { localStorage.setItem('cedear_alerts', JSON.stringify(alerts)); }
+
+function openAlerts(ticker) {
+  document.getElementById('alertOverlay').classList.add('open');
+  renderAlertModal(ticker || currentTicker);
+}
+
+function closeAlerts() { document.getElementById('alertOverlay').classList.remove('open'); }
+
+function setAlertCond(cond) {
+  alertCondition = cond;
+  const aboveBtn = document.getElementById('alertCondAbove');
+  const belowBtn = document.getElementById('alertCondBelow');
+  if (aboveBtn) aboveBtn.className = 'alert-cond-btn above' + (cond === 'above' ? ' sel' : '');
+  if (belowBtn) belowBtn.className = 'alert-cond-btn below' + (cond === 'below' ? ' sel' : '');
+}
+
+function renderAlertModal(prefillTicker) {
+  const active    = alerts.filter(a => !a.triggered);
+  const triggered = alerts.filter(a =>  a.triggered);
+  const curPrice  = priceCache[prefillTicker]?.price;
+  const priceHint = curPrice ? curPrice.toFixed(2) : '';
+
+  document.getElementById('alertBody').innerHTML = `
+    <div>
+      <div class="alert-list-title" style="margin-bottom:8px">NUEVA ALERTA</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+        <div>
+          <div style="font-size:.5rem;letter-spacing:1px;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:4px">TICKER</div>
+          <input class="alert-input" id="alertTicker" type="text" value="${prefillTicker}" placeholder="NVDA">
+        </div>
+        <div>
+          <div style="font-size:.5rem;letter-spacing:1px;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:4px">PRECIO OBJETIVO</div>
+          <input class="alert-input" id="alertPrice" type="number" step="any" min="0.01" placeholder="${priceHint}">
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:.5rem;letter-spacing:1px;color:var(--muted);font-family:'Space Mono',monospace;margin-bottom:4px">CONDICIÓN</div>
+        <div class="alert-cond">
+          <button class="alert-cond-btn above sel" id="alertCondAbove" onclick="setAlertCond('above')">↑ Por encima</button>
+          <button class="alert-cond-btn below" id="alertCondBelow" onclick="setAlertCond('below')">↓ Por debajo</button>
+        </div>
+      </div>
+      <button class="alert-add-btn" style="width:100%" onclick="addAlert()">+ AGREGAR ALERTA</button>
+    </div>
+
+    ${active.length ? `<div>
+      <div class="alert-list-title" style="margin-bottom:8px">ACTIVAS (${active.length})</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${active.map(a => {
+          const cur  = priceCache[a.ticker]?.price;
+          const dist = cur ? (a.targetPrice - cur) / cur * 100 : null;
+          const distStr   = dist != null ? `${dist >= 0 ? '+' : ''}${dist.toFixed(1)}% desde precio actual` : '';
+          const condColor = a.condition === 'above' ? 'var(--green)' : 'var(--red)';
+          const condSym   = a.condition === 'above' ? '↑' : '↓';
+          return `<div class="alert-item">
+            <div class="alert-item-info">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;color:var(--accent)">${a.ticker}</span>
+                <span style="color:${condColor};font-size:.65rem;font-family:'Space Mono',monospace">${condSym} $${a.targetPrice.toFixed(2)}</span>
+              </div>
+              <div style="font-size:.57rem;color:var(--muted)">${distStr}</div>
+            </div>
+            <button class="alert-item-del" onclick="deleteAlert(${a.id})">✕</button>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
+    ${triggered.length ? `<div>
+      <div class="alert-list-title" style="margin-bottom:8px">DISPARADAS</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${triggered.map(a => {
+          const condSym = a.condition === 'above' ? '↑' : '↓';
+          const ts = a.triggeredAt ? new Date(a.triggeredAt).toLocaleString('es-AR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+          return `<div class="alert-item triggered">
+            <div class="alert-item-info">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;color:var(--muted)">${a.ticker}</span>
+                <span style="color:var(--muted);font-size:.65rem;font-family:'Space Mono',monospace">${condSym} $${a.targetPrice.toFixed(2)}</span>
+              </div>
+              <div style="font-size:.57rem;color:var(--muted)">${ts}</div>
+            </div>
+            <button class="alert-item-del" onclick="deleteAlert(${a.id})">✕</button>
+          </div>`;
+        }).join('')}
+        <button onclick="clearTriggeredAlerts()" style="width:100%;padding:4px;font-size:.58rem;
+          font-family:'Space Mono',monospace;background:transparent;border:1px solid var(--border2);
+          color:var(--muted);border-radius:3px;cursor:pointer;margin-top:3px">Limpiar disparadas</button>
+      </div>
+    </div>` : ''}
+
+    ${!active.length && !triggered.length ? `<div class="alert-empty">No hay alertas configuradas.</div>` : ''}
+  `;
+
+  setAlertCond(alertCondition);
+  const tkInput = document.getElementById('alertTicker');
+  if (tkInput) tkInput.addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
+}
+
+function addAlert() {
+  const ticker = (document.getElementById('alertTicker')?.value || '').trim().toUpperCase();
+  const price  = parseFloat(document.getElementById('alertPrice')?.value);
+  if (!ticker || !price || price <= 0) { showToast('Ingresá un ticker y precio válido.', 'err'); return; }
+  alerts.push({
+    id: Date.now(), ticker, condition: alertCondition,
+    targetPrice: price, createdAt: new Date().toISOString(),
+    triggered: false, triggeredAt: null,
+  });
+  saveAlerts();
+  updateAlertBadge();
+  renderAlertModal(ticker);
+}
+
+function deleteAlert(id) {
+  alerts = alerts.filter(a => a.id !== id);
+  saveAlerts();
+  updateAlertBadge();
+  const tk = document.getElementById('alertTicker')?.value || currentTicker;
+  renderAlertModal(tk);
+}
+
+function clearTriggeredAlerts() {
+  alerts = alerts.filter(a => !a.triggered);
+  saveAlerts();
+  updateAlertBadge();
+  renderAlertModal(currentTicker);
+}
+
+function checkAlerts() {
+  let changed = false;
+  alerts.forEach(a => {
+    if (a.triggered) return;
+    const price = priceCache[a.ticker]?.price;
+    if (!price) return;
+    const hit = a.condition === 'above' ? price >= a.targetPrice : price <= a.targetPrice;
+    if (hit) {
+      a.triggered   = true;
+      a.triggeredAt = new Date().toISOString();
+      changed = true;
+      const sym = a.condition === 'above' ? '↑' : '↓';
+      showToast(`${sym} ${a.ticker} tocó $${price.toFixed(2)} — alerta ${a.condition === 'above' ? '>' : '<'} $${a.targetPrice.toFixed(2)}`, 'alert');
+    }
+  });
+  if (changed) { saveAlerts(); updateAlertBadge(); }
+}
+
+function updateAlertBadge() {
+  const active = alerts.filter(a => !a.triggered).length;
+  const badge  = document.getElementById('alertBadge');
+  if (!badge) return;
+  if (active > 0) { badge.textContent = active; badge.style.display = 'flex'; }
+  else badge.style.display = 'none';
+}
+
 // Arranca el flujo de autenticación
 initAuth();
+updateAlertBadge();
 
 // ══════════════════════════════════════════
 // INFO POPUP
