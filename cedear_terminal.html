@@ -1059,43 +1059,66 @@ async function loadFromServer() {
     const r = await fetch(`${API}/sync`);
     if (!r.ok) return;
     const data = await r.json();
+
+    // Sólo sobreescribir si el servidor tiene datos más recientes que el local
+    const localPortfolioTs = parseInt(localStorage.getItem('cedear_portfolio_ts') || '0');
     if (data.portfolio && Array.isArray(data.portfolio.items)) {
-      PORTFOLIO = data.portfolio.items;
-      localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
+      const serverTs = data.portfolio.ts || 0;
+      if (serverTs > localPortfolioTs) {
+        PORTFOLIO = data.portfolio.items;
+        localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
+        localStorage.setItem('cedear_portfolio_ts', serverTs);
+        if (data.portfolio.total) {
+          portfolioTotal = data.portfolio.total;
+          localStorage.setItem('cedear_total', portfolioTotal);
+        }
+      }
     }
-    if (data.portfolio?.total) {
-      portfolioTotal = data.portfolio.total;
-      localStorage.setItem('cedear_total', portfolioTotal);
-    }
+
+    const localSimTs = parseInt(localStorage.getItem(SIM_KEY + '_ts') || '0');
     if (data.simulator) {
       const sim = data.simulator;
-      if (Array.isArray(sim)) {
-        // formato legacy
-        simPositions = sim;
-      } else {
-        if (Array.isArray(sim.open))   simPositions = sim.open;
-        if (Array.isArray(sim.closed)) simClosedPositions = sim.closed;
-        if (typeof sim.balance === 'number') simAccumulatedPnl = sim.balance;
+      const serverTs = sim.ts || 0;
+      if (serverTs > localSimTs) {
+        if (Array.isArray(sim)) {
+          simPositions = sim; // formato legacy
+        } else {
+          if (Array.isArray(sim.open))   simPositions = sim.open;
+          if (Array.isArray(sim.closed)) simClosedPositions = sim.closed;
+          if (typeof sim.balance === 'number') simAccumulatedPnl = sim.balance;
+        }
+        localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
+        localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
+        localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
+        localStorage.setItem(SIM_KEY + '_ts', serverTs);
       }
-      localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
-      localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
-      localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
     }
-    if (data.watchlist && Array.isArray(data.watchlist)) {
-      watchlist = data.watchlist;
-      localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
+
+    const localWlTs = parseInt(localStorage.getItem(WL_KEY + '_ts') || '0');
+    if (data.watchlist) {
+      const wlItems = Array.isArray(data.watchlist) ? data.watchlist : data.watchlist.items;
+      const serverTs = data.watchlist.ts || 0;
+      if (wlItems && serverTs > localWlTs) {
+        watchlist = wlItems;
+        localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
+        localStorage.setItem(WL_KEY + '_ts', serverTs);
+      }
     }
   } catch {}
 }
 
 function savePortfolio() {
+  const ts = Date.now();
   localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
-  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal });
+  localStorage.setItem('cedear_portfolio_ts', ts);
+  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts });
 }
 function saveTotal(v) {
   portfolioTotal = v;
+  const ts = Date.now();
   localStorage.setItem('cedear_total', v);
-  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal });
+  localStorage.setItem('cedear_portfolio_ts', ts);
+  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts });
 }
 
 // Migra y mantiene avgPrice como ancla del P&L.
@@ -2453,8 +2476,10 @@ const WL_KEY = 'cedear_watchlist';
 let watchlist = JSON.parse(localStorage.getItem(WL_KEY) || '[]');
 
 function saveWatchlist() {
+  const ts = Date.now();
   localStorage.setItem(WL_KEY, JSON.stringify(watchlist));
-  syncToServer('watchlist', watchlist);
+  localStorage.setItem(WL_KEY + '_ts', ts);
+  syncToServer('watchlist', { items: watchlist, ts });
 }
 
 function switchSbTab(tab) {
@@ -3187,10 +3212,12 @@ function setDir(d) {
 }
 
 function saveSim() {
+  const ts = Date.now();
   localStorage.setItem(SIM_KEY,         JSON.stringify(simPositions));
   localStorage.setItem(SIM_CLOSED_KEY,  JSON.stringify(simClosedPositions));
   localStorage.setItem(SIM_BALANCE_KEY, simAccumulatedPnl);
-  syncToServer('simulator', { open: simPositions, closed: simClosedPositions, balance: simAccumulatedPnl });
+  localStorage.setItem(SIM_KEY + '_ts', ts);
+  syncToServer('simulator', { open: simPositions, closed: simClosedPositions, balance: simAccumulatedPnl, ts });
 }
 
 function cashSimPosition(id) {
