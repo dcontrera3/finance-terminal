@@ -783,6 +783,7 @@ canvas{display:block;}
       <div class="ch-px" id="chPx">--</div>
       <div class="ch-chg up" id="chChg">--%</div>
       <button class="ai-btn" id="aiBtn" onclick="openAdvice()">✦ CONSEJO IA</button>
+      <button class="ai-btn" id="exportPromptBtn" onclick="exportPrompt()" style="background:transparent;border-color:var(--accent);color:var(--accent);opacity:.85" title="Copiar prompt completo para Claude / Gemini">⎘ PROMPT</button>
       <div class="ch-stats">
         <div><div class="chs-l">OPEN</div><div class="chs-v" id="stO">--</div></div>
         <div><div class="chs-l">HIGH</div><div class="chs-v" id="stH" style="color:var(--green)">--</div></div>
@@ -2985,6 +2986,142 @@ async function openAdvice() {
 
   lastAdviceResult = analyzeIndicators(indWithEarnings);
   document.getElementById('aiBody').innerHTML = renderAdviceHtml(lastAdviceResult);
+}
+
+async function exportPrompt() {
+  if (!lastIndicators) { showToast('Cargá un ticker primero.', 'err'); return; }
+
+  const btn = document.getElementById('exportPromptBtn');
+  btn.textContent = '...'; btn.disabled = true;
+
+  const ind = lastIndicators;
+  let newsData = null;
+  try { newsData = await fetchNews(ind.ticker); } catch {}
+
+  const daysToEarnings = newsData?.days_to_earnings ?? null;
+  const headlines = (newsData?.news || []).slice(0, 5).map((n, i) => `${i+1}. ${n.title}`).join('\n');
+  const earningsLine = daysToEarnings != null
+    ? (daysToEarnings <= 0 ? `REPORTE HOY / hace ${Math.abs(daysToEarnings)} días` : `Próximo reporte en ${daysToEarnings} días`)
+    : 'Sin fecha confirmada';
+
+  const f2 = v => v != null ? '$' + v.toFixed(2) : 'N/D';
+  const f4 = v => v != null ? v.toFixed(4) : 'N/D';
+  const fv = v => v != null ? v.toFixed(2) : 'N/D';
+
+  const price  = ind.price;
+  const ema20  = ind.ema20, ema50 = ind.ema50, ema200 = ind.ema200;
+  const rsi    = ind.rsi;
+  const mLine  = ind.macd_line, mSig = ind.macd_signal, mHist = ind.macd_hist;
+  const bbU    = ind.bb_upper, bbM = ind.bb_mid, bbL = ind.bb_lower;
+  const atr    = ind.atr, volR = ind.vol_ratio;
+  const sup    = (ind.support  || []).slice(0, 3).map(f2).join(' | ') || 'No detectados';
+  const res    = (ind.resistance || []).slice(0, 3).map(f2).join(' | ') || 'No detectadas';
+
+  const emaAlign = ema20 > ema50 && ema50 > ema200 ? 'ALCISTA (20>50>200)'
+    : ema20 < ema50 && ema50 < ema200 ? 'BAJISTA (20<50<200)' : 'SIN ALINEACIÓN CLARA';
+  const bbPos = bbU && bbL
+    ? (price > bbU ? 'FUERA SUPERIOR (sobreextensión)' : price < bbL ? 'FUERA INFERIOR (sobreventa técnica)' : `DENTRO (${((price-bbL)/(bbU-bbL)*100).toFixed(0)}% desde la banda inferior)`)
+    : 'N/D';
+  const atrPct = atr && price ? (atr / price * 100).toFixed(2) : 'N/D';
+  const bullScore = ind.bull_score ?? '?';
+
+  const prompt = `Sos un analista técnico experto en mercados financieros. Tu tarea es analizar el siguiente set completo de indicadores técnicos y darme una recomendación clara y accionable: ¿es momento de operar ${ind.ticker} en ${ind.timeframe} o no?
+
+Sé directo, honesto y sin rodeos. Si las señales son mixtas o el contexto no es favorable, decí que no hay operación y explicá qué debería cambiar para que la haya.
+
+═══════════════════════════════════════
+ACTIVO: ${ind.ticker} | TIMEFRAME: ${ind.timeframe}
+═══════════════════════════════════════
+
+PRECIO ACTUAL: ${f2(price)} | Variación 24h: ${ind.chg_24h != null ? (ind.chg_24h >= 0 ? '+' : '') + ind.chg_24h.toFixed(2) + '%' : 'N/D'}
+
+── MEDIAS MÓVILES EXPONENCIALES ──
+EMA 20:  ${f2(ema20)}  → precio ${price > ema20 ? 'POR ENCIMA' : 'POR DEBAJO'} (diferencia: ${((price/ema20-1)*100).toFixed(2)}%)
+EMA 50:  ${f2(ema50)}  → precio ${price > ema50 ? 'POR ENCIMA' : 'POR DEBAJO'} (diferencia: ${((price/ema50-1)*100).toFixed(2)}%)
+EMA 200: ${f2(ema200)}  → precio ${price > ema200 ? 'POR ENCIMA' : 'POR DEBAJO'} (diferencia: ${((price/ema200-1)*100).toFixed(2)}%)
+Alineación EMAs: ${emaAlign}
+
+── RSI (14 períodos) ──
+RSI: ${fv(rsi)} → ${rsi > 75 ? 'SOBRECOMPRA EXTREMA' : rsi > 70 ? 'SOBRECOMPRA' : rsi < 25 ? 'SOBREVENTA EXTREMA' : rsi < 30 ? 'SOBREVENTA' : rsi >= 50 ? 'MOMENTUM POSITIVO' : 'MOMENTUM NEGATIVO'}
+Zona crítica: ${rsi > 70 ? 'Riesgo de corrección — RSI en territorio de sobrecompra' : rsi < 30 ? 'Posible punto de inflexión — RSI en territorio de sobreventa' : 'Zona neutral, sin señal extrema'}
+
+── MACD (12, 26, 9) ──
+Línea MACD: ${f4(mLine)}
+Línea Señal: ${f4(mSig)}
+Histograma:  ${mHist != null ? (mHist >= 0 ? '+' : '') + mHist.toFixed(4) : 'N/D'} → ${mHist > 0 ? 'POSITIVO (momentum alcista)' : 'NEGATIVO (momentum bajista)'}
+Cruce: MACD ${mLine > mSig ? 'POR ENCIMA de señal (presión compradora)' : 'POR DEBAJO de señal (presión vendedora)'}
+
+── BANDAS DE BOLLINGER (20, 2σ) ──
+Banda Superior: ${f2(bbU)}
+Media (BB):     ${f2(bbM)}
+Banda Inferior: ${f2(bbL)}
+Ancho de banda: ${bbU && bbL ? ((bbU-bbL)/bbM*100).toFixed(2) + '% (volatilidad ' + ((bbU-bbL)/bbM*100 > 8 ? 'ALTA' : (bbU-bbL)/bbM*100 > 4 ? 'MEDIA' : 'BAJA') + ')' : 'N/D'}
+Posición del precio: ${bbPos}
+
+── VOLATILIDAD Y VOLUMEN ──
+ATR (14):        ${f2(atr)} (${atrPct}% del precio) → riesgo por movimiento esperado diario/semanal
+Volumen vs MA20: ×${volR != null ? volR.toFixed(2) : 'N/D'} ${volR > 1.5 ? '(VOLUMEN ELEVADO — confirma movimiento)' : volR > 0.8 ? '(volumen normal)' : '(volumen bajo — señal débil)'}
+
+── SOPORTES Y RESISTENCIAS (pivots detectados) ──
+Resistencias: ${res}
+Soportes:     ${sup}
+Distancia a R1: ${ind.resistance?.[0] ? ((ind.resistance[0]/price-1)*100).toFixed(2) + '%' : 'N/D'}
+Distancia a S1: ${ind.support?.[0] ? ((price/ind.support[0]-1)*100).toFixed(2) + '%' : 'N/D'}
+
+── SCORE TÉCNICO INTERNO ──
+Señales alcistas: ${bullScore}/8 (${Math.round(bullScore/8*100)}%)
+Señales bajistas: ${8-bullScore}/8 (${Math.round((8-bullScore)/8*100)}%)
+Nota: este score es un conteo simple de cruces binarios, no pondera la magnitud.
+
+── CONTEXTO DE BALANCE (EARNINGS) ──
+${earningsLine}
+${daysToEarnings != null && daysToEarnings <= 7 ? '⚠️ ATENCIÓN: reporte inminente — alta probabilidad de gap violento. El análisis técnico pierde validez en este contexto.' : daysToEarnings != null && daysToEarnings <= 14 ? 'Precaución: reporte próximo puede generar volatilidad elevada.' : ''}
+
+── TITULARES RECIENTES ──
+${headlines || 'Sin noticias disponibles'}
+
+═══════════════════════════════════════
+LO QUE NECESITO DE VOS:
+═══════════════════════════════════════
+
+1. SEÑAL: [COMPRA LONG / VENTA SHORT / NEUTRO — NO OPERAR]
+
+2. ANÁLISIS (3-4 párrafos):
+   - Qué confluye a favor de la operación
+   - Qué contradice o genera duda
+   - Cuál es el catalizador principal (si lo hay)
+   - Si hay earnings próximos, cómo afecta al setup
+
+3. PLAN DE OPERACIÓN (solo si hay señal clara):
+   Entrada: $X
+   Stop Loss: $X (−X%) — justificá técnicamente el nivel
+   Take Profit: $X (+X%) — justificá técnicamente el nivel
+   Ratio R/R: 1:X
+   Invalidación: qué nivel/evento invalida la tesis
+
+4. NIVEL DE RIESGO: [BAJO / MEDIO / ALTO] con justificación breve
+
+5. CONFIANZA: [X/10] — explicá brevemente por qué no es más alta
+
+6. QUÉ ESPERAR ANTES DE ENTRAR (si decís NEUTRO): qué condición técnica específica confirmaría la entrada
+
+⚠️ Esto es análisis técnico para toma de decisiones personales. Sé preciso, no genérico.`;
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    showToast(`Prompt de ${ind.ticker} copiado al portapapeles`, 'ok');
+  } catch {
+    // Fallback: mostrar en textarea
+    const ta = document.createElement('textarea');
+    ta.value = prompt;
+    ta.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:80vw;height:60vh;z-index:9999;background:var(--bg2);color:var(--text);border:1px solid var(--accent);padding:12px;font-family:monospace;font-size:.7rem';
+    document.body.appendChild(ta);
+    ta.select();
+    showToast('No se pudo copiar automáticamente. Seleccioná el texto y copiá manualmente.', 'alert');
+    setTimeout(() => ta.remove(), 30000);
+  }
+
+  btn.textContent = '⎘ PROMPT'; btn.disabled = false;
 }
 
 function addAdviceToSim() {
