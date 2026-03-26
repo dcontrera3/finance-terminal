@@ -1345,8 +1345,15 @@ function renderSidebar() {
     const pnlColor = pnlUSD == null ? 'var(--muted)' : pnlUSD >= 0 ? 'var(--green)' : 'var(--red)';
     const pnlSign  = pnlUSD != null ? (pnlUSD >= 0 ? '+' : '') : '';
     const pnlStr   = pnlUSD != null
-      ? `${pnlSign}$${Math.abs(pnlUSD).toFixed(0)} (${pnlSign}${pnlPct.toFixed(1)}%)`
+      ? `${pnlSign}$${Math.abs(pnlUSD).toFixed(2)} (${pnlSign}${pnlPct.toFixed(2)}%)`
       : '';
+    // Costo base: lo que pagaste (avgPrice × nominales en modo CEDEAR)
+    const costBasis = (nominales && avgPrice) ? avgPrice * nominales
+      : (qty && avgPrice) ? qty * avgPrice
+      : (item.usd || null);
+    const costStr = costBasis != null
+      ? '$' + costBasis.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})
+      : '···';
 
     const el = document.createElement('div');
     el.className = 'pi' + (item.ticker === currentTicker ? ' active' : '');
@@ -1361,14 +1368,19 @@ function renderSidebar() {
         <span class="pi-nm">${item.name}</span>
         <span class="pi-ch" style="color:${cc}">${cs}</span>
       </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+        <span style="font-size:.48rem;color:var(--muted);font-family:'Space Mono',monospace">Costo</span>
+        <span style="font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;color:var(--muted)">${costStr}</span>
+        <span style="font-size:.48rem;color:var(--muted);margin-left:4px">→</span>
+        <span style="font-size:.48rem;color:var(--muted)">Hoy</span>
+        <span style="font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;color:var(--text)">$${curVal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        <span class="pi-remove" title="Eliminar posición" style="margin-left:auto">✕</span>
+      </div>
       <div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">
-        <span style="font-family:'Space Mono',monospace;font-size:.75rem;font-weight:700;color:var(--text)">
-          $${curVal.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}
-        </span>
-        <span style="font-size:.6rem;font-family:'Space Mono',monospace;font-weight:700;color:${pnlColor}">
+        <span style="font-size:.48rem;color:var(--muted);font-family:'Space Mono',monospace">P&amp;L</span>
+        <span style="font-size:.68rem;font-family:'Space Mono',monospace;font-weight:700;color:${pnlColor}">
           ${pnlStr || '···'}
         </span>
-        <span class="pi-remove" title="Eliminar posición" style="margin-left:auto">✕</span>
       </div>
       <div style="display:flex;align-items:center;gap:4px;margin-bottom:3px">
         <span style="font-size:.52rem;color:var(--muted)">Nom:</span>
