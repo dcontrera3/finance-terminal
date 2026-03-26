@@ -1052,7 +1052,18 @@ let portfolioTotal = (() => {
 })();
 // ── Sincronización con servidor ──
 async function syncToServer(key, value) {
-  try { await fetch(`${API}/sync`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({key, value}) }); } catch {}
+  if (!authToken) return false; // sin sesión, no hay nada que sincronizar
+  const body = JSON.stringify({ key, value });
+  const opts  = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body };
+  try {
+    const r = await fetch(`${API}/sync`, opts);
+    if (r.ok) return true;
+    // Reintentar una vez si el servidor devuelve error recuperable
+    const r2 = await fetch(`${API}/sync`, opts);
+    return r2.ok;
+  } catch {
+    return false;
+  }
 }
 async function loadFromServer() {
   try {
@@ -1107,18 +1118,25 @@ async function loadFromServer() {
   } catch {}
 }
 
-function savePortfolio() {
+function savePortfolio(showFeedback = false) {
   const ts = Date.now();
   localStorage.setItem('cedear_portfolio', JSON.stringify(PORTFOLIO));
   localStorage.setItem('cedear_portfolio_ts', ts);
-  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts });
+  if (authToken) {
+    syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts }).then(ok => {
+      if (showFeedback) {
+        if (ok) showToast('Cartera guardada en tu cuenta', 'ok');
+        else     showToast('No se pudo sincronizar con el servidor. Los cambios están guardados localmente.', 'err');
+      }
+    });
+  }
 }
 function saveTotal(v) {
   portfolioTotal = v;
   const ts = Date.now();
   localStorage.setItem('cedear_total', v);
   localStorage.setItem('cedear_portfolio_ts', ts);
-  syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts });
+  if (authToken) syncToServer('portfolio', { items: PORTFOLIO, total: portfolioTotal, ts });
 }
 
 // Migra y mantiene avgPrice como ancla del P&L.
@@ -1517,7 +1535,7 @@ function renderSidebar() {
       e.stopPropagation();
       if (PORTFOLIO.length <= 1) return;
       PORTFOLIO.splice(idx, 1);
-      savePortfolio();
+      savePortfolio(true);
       if (currentTicker === item.ticker) { currentTicker = PORTFOLIO[0].ticker; loadChart(); }
       renderSidebar(); renderTabs(); updateActive();
     });
@@ -2712,7 +2730,7 @@ async function addPortfolioItem() {
   const usedColors = PORTFOLIO.map(p => p.color);
   const color = PALETTE.find(c => !usedColors.includes(c)) || PALETTE[PORTFOLIO.length % PALETTE.length];
   PORTFOLIO.push({ ticker, name: ticker, color, avgPrice: entryPrice, qty, usd, cedearRatio, nominales, diasTenencia: diasIn });
-  savePortfolio();
+  savePortfolio(true);
   ['newTicker','newNominales','newRatio','newAvgPrice','newDias'].forEach(id => { document.getElementById(id).value = ''; });
   toggleAddForm();
   renderSidebar(); renderTabs(); updateActive();
