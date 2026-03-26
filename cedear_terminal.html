@@ -726,8 +726,7 @@ canvas{display:block;}
           <input id="newTicker" type="text" placeholder="Ticker (ej: AAPL)" autocomplete="off" style="text-transform:uppercase">
           <input id="newNominales" type="number" placeholder="Nominales (ej: 100)" min="1" step="1">
           <input id="newRatio" type="number" placeholder="Ratio: 1 acc = N CEDEARs (ej: 10)" min="1" step="any">
-          <input id="newAvgPrice" type="number" placeholder="Precio promedio por CEDEAR en USD (ej: 12.05)" min="0" step="any">
-          <input id="newDias" type="number" placeholder="Días de tenencia (ej: 45)" min="0" step="1">
+          <input id="newAvgPrice" type="number" placeholder="Precio actual por CEDEAR en USD (ej: 12.05)" min="0" step="any">
           <div class="sb-add-actions">
             <button class="sb-ok" onclick="addPortfolioItem()">AGREGAR</button>
             <button class="sb-cancel" onclick="toggleAddForm()">Cancelar</button>
@@ -1327,10 +1326,8 @@ function renderSidebar() {
     const avgPrice     = item.avgPrice;
     const nominales    = item.nominales;
     const cedearRatio  = item.cedearRatio;
-    const diasTenencia = item.diasTenencia;
     const nomStr   = nominales != null ? nominales.toLocaleString() : '···';
     const ratioStr = cedearRatio != null ? '1:' + cedearRatio : '···';
-    const diasStr  = diasTenencia != null ? diasTenencia + 'd' : '···';
     // Precio actual por CEDEAR (subyacente / ratio) o por acción en modo legacy
     const cedearPrice  = (cedearRatio && c?.price) ? c.price / cedearRatio : null;
     const avgStr       = avgPrice ? '$' + avgPrice.toFixed(4) : '···';
@@ -1389,8 +1386,6 @@ function renderSidebar() {
         <span style="font-size:.52rem;color:var(--muted);margin-left:auto">
           <span class="pi-ratio-val" style="font-family:'Space Mono',monospace;font-size:.58rem;cursor:pointer;border-bottom:1px dashed var(--border2);color:var(--muted)">${ratioStr}</span>
         </span>
-        <span style="font-size:.52rem;color:var(--muted)">|</span>
-        <span class="pi-dias-val" style="font-family:'Space Mono',monospace;font-size:.58rem;cursor:pointer;border-bottom:1px dashed var(--border2);color:var(--muted)">${diasStr}</span>
       </div>
       <div class="pi-dca-form" style="display:none;gap:4px;margin-bottom:3px;align-items:center">
         <input class="pi-dca-nom" type="number" placeholder="+nom" min="1" step="1" style="width:55px;background:var(--bg2);border:1px solid var(--accent);border-radius:2px;color:var(--text);font-family:Space Mono,monospace;font-size:.58rem;padding:0 4px;outline:none">
@@ -1410,7 +1405,7 @@ function renderSidebar() {
       <div class="pi-pct">${pct.toFixed(1)}% cartera</div>`;
 
     el.addEventListener('click', e => {
-      const skip = ['pi-avg-val','pi-remove','pi-news-btn','pi-nom-val','pi-ratio-val','pi-dias-val','pi-dca-btn','pi-dca-ok','pi-dca-cancel'];
+      const skip = ['pi-avg-val','pi-remove','pi-news-btn','pi-nom-val','pi-ratio-val','pi-dca-btn','pi-dca-ok','pi-dca-cancel'];
       if (skip.some(cls => e.target.classList.contains(cls))) return;
       currentTicker = item.ticker; loadChart(); updateActive();
     });
@@ -1496,30 +1491,19 @@ function renderSidebar() {
       inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') inp.blur(); if (ev.key === 'Escape') renderSidebar(); });
     });
 
-    // Editar días de tenencia
-    el.querySelector('.pi-dias-val').addEventListener('click', e => {
-      e.stopPropagation();
-      const span = e.target;
-      const inp = document.createElement('input');
-      inp.type = 'number'; inp.value = item.diasTenencia != null ? item.diasTenencia : ''; inp.min = '0'; inp.step = '1';
-      inp.style.cssText = 'width:40px;background:var(--bg2);border:1px solid var(--accent);border-radius:2px;color:var(--text);font-family:Space Mono,monospace;font-size:.58rem;padding:0 4px;outline:none';
-      span.replaceWith(inp); inp.focus(); inp.select();
-      const save = () => {
-        const v = parseInt(inp.value);
-        if (!isNaN(v) && v >= 0) { PORTFOLIO[idx].diasTenencia = v; savePortfolio(); }
-        renderSidebar();
-      };
-      inp.addEventListener('blur', save);
-      inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') inp.blur(); if (ev.key === 'Escape') renderSidebar(); });
-    });
-
-    // DCA: toggle formulario
+    // DCA: toggle formulario — auto-rellena precio con live price
     el.querySelector('.pi-dca-btn').addEventListener('click', e => {
       e.stopPropagation();
       const form = el.querySelector('.pi-dca-form');
       const open = form.style.display === 'none';
       form.style.display = open ? 'flex' : 'none';
-      if (open) el.querySelector('.pi-dca-nom').focus();
+      if (open) {
+        const livePrice = priceCache[item.ticker]?.price;
+        const ratio = item.cedearRatio;
+        const priceInput = el.querySelector('.pi-dca-price');
+        if (livePrice && ratio) priceInput.value = (livePrice / ratio).toFixed(4);
+        el.querySelector('.pi-dca-nom').focus();
+      }
     });
 
     el.querySelector('.pi-dca-cancel').addEventListener('click', e => {
@@ -1531,18 +1515,18 @@ function renderSidebar() {
     el.querySelector('.pi-dca-ok').addEventListener('click', e => {
       e.stopPropagation();
       const newNom   = parseFloat(el.querySelector('.pi-dca-nom').value);
-      const newPrice = parseFloat(el.querySelector('.pi-dca-price').value);
+      const enteredPrice = parseFloat(el.querySelector('.pi-dca-price').value);
+      const livePrice = priceCache[item.ticker]?.price;
+      const newPrice = enteredPrice > 0 ? enteredPrice : (livePrice && item.cedearRatio ? livePrice / item.cedearRatio : 0);
       if (!newNom || newNom <= 0 || !newPrice || newPrice <= 0) {
-        showToast('Ingresá nominales y precio válidos.', 'err'); return;
+        showToast('Ingresá nominales válidos. Precio no disponible.', 'err'); return;
       }
       const p = PORTFOLIO[idx];
       const existingNom = p.nominales || 0;
       const existingAvg = p.avgPrice  || newPrice;
-      const existingDias = p.diasTenencia || 0;
       const totalNom = existingNom + newNom;
       p.nominales    = totalNom;
       p.avgPrice     = (existingNom * existingAvg + newNom * newPrice) / totalNom;
-      p.diasTenencia = existingNom > 0 ? Math.round((existingNom * existingDias) / totalNom) : 0;
       if (p.cedearRatio) {
         p.qty = p.nominales / p.cedearRatio;
         p.usd = p.qty * p.avgPrice;
@@ -2727,7 +2711,6 @@ async function addPortfolioItem() {
   const nominales  = parseFloat(document.getElementById('newNominales').value);
   const cedearRatio = parseFloat(document.getElementById('newRatio').value);
   const avgPriceIn = parseFloat(document.getElementById('newAvgPrice').value);
-  const diasIn     = parseInt(document.getElementById('newDias').value) || 0;
 
   if (!ticker || !nominales || nominales <= 0 || !cedearRatio || cedearRatio <= 0) {
     showToast('Ingresá ticker, nominales y ratio válidos.', 'err'); return;
@@ -2753,9 +2736,9 @@ async function addPortfolioItem() {
 
   const usedColors = PORTFOLIO.map(p => p.color);
   const color = PALETTE.find(c => !usedColors.includes(c)) || PALETTE[PORTFOLIO.length % PALETTE.length];
-  PORTFOLIO.push({ ticker, name: ticker, color, avgPrice: entryPrice, qty, usd, cedearRatio, nominales, diasTenencia: diasIn });
+  PORTFOLIO.push({ ticker, name: ticker, color, avgPrice: entryPrice, qty, usd, cedearRatio, nominales });
   savePortfolio(true);
-  ['newTicker','newNominales','newRatio','newAvgPrice','newDias'].forEach(id => { document.getElementById(id).value = ''; });
+  ['newTicker','newNominales','newRatio','newAvgPrice'].forEach(id => { document.getElementById(id).value = ''; });
   toggleAddForm();
   renderSidebar(); renderTabs(); updateActive();
 }
