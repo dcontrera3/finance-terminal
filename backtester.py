@@ -419,6 +419,68 @@ def print_summary_table(results):
     print()
 
 
+def portfolio_stats(results, ann_factor=252):
+    """
+    Simula el comportamiento del portfolio completo sumando los P&L de todos los tickers
+    en cada período. Muestra el Sharpe y drawdown consolidados.
+    """
+    all_trades = []
+    for r in results:
+        for t in r.get('trades', []):
+            all_trades.append(t)
+
+    if not all_trades:
+        print("Sin trades para calcular portfolio.")
+        return
+
+    tdf = pd.DataFrame(all_trades)
+    tdf['exit_date'] = pd.to_datetime(tdf['exit_date'])
+    tdf = tdf.sort_values('exit_date')
+
+    # Capital acumulado sumando P&L de todos los trades en orden cronológico
+    initial = 10_000
+    capital = initial
+    equity  = [capital]
+    for _, row in tdf.iterrows():
+        capital += row['pnl']
+        equity.append(capital)
+
+    eq       = pd.Series(equity)
+    rets     = eq.pct_change().dropna()
+    sharpe   = rets.mean() / rets.std() * np.sqrt(ann_factor) if rets.std() > 0 else 0
+    roll_max = eq.cummax()
+    max_dd   = float(((eq - roll_max) / roll_max).min() * 100)
+
+    total_ret    = (capital - initial) / initial * 100
+    n            = len(tdf)
+    wins         = (tdf['pnl'] > 0).sum()
+    win_rate     = wins / n * 100 if n > 0 else 0
+    profit_factor = (tdf.loc[tdf['pnl'] > 0, 'pnl'].sum() /
+                     abs(tdf.loc[tdf['pnl'] <= 0, 'pnl'].sum())
+                     if tdf.loc[tdf['pnl'] <= 0, 'pnl'].sum() != 0 else float('inf'))
+    longs  = (tdf['dir'] == 'LONG').sum()  if 'dir' in tdf.columns else n
+    shorts = (tdf['dir'] == 'SHORT').sum() if 'dir' in tdf.columns else 0
+
+    verdict, reason = evaluate({
+        'n_trades': n, 'sharpe': round(sharpe, 2), 'max_drawdown': round(max_dd, 2),
+        'win_rate': round(win_rate, 2), 'profit_factor': round(profit_factor, 2),
+        'total_return': round(total_ret, 2), 'strategy': results[0].get('strategy', '')
+    })
+    vc = verdict_color(verdict)
+
+    print(color("\n══ PORTFOLIO CONSOLIDADO ══", 'cyan'))
+    print(f"  Tickers:        {', '.join(r['ticker'] for r in results)}")
+    print(f"  Capital:        ${initial:,.0f} → ${capital:,.2f}")
+    print(f"  Retorno total:  {total_ret:+.1f}%")
+    print(f"  Sharpe:         {sharpe:.2f}")
+    print(f"  Max Drawdown:   {max_dd:.1f}%")
+    print(f"  Trades:         {n} total  ({longs} LONG / {shorts} SHORT)")
+    print(f"  Win rate:       {win_rate:.1f}%")
+    print(f"  Profit Factor:  {profit_factor:.2f}")
+    print(f"  Veredicto:      {color(verdict, vc)}  —  {reason}")
+    print()
+
+
 def print_detail(r):
     verdict, reason = evaluate(r)
     vc = verdict_color(verdict)
@@ -608,6 +670,7 @@ def main():
     parser.add_argument('--optimize', action='store_true', help='Buscar parámetros óptimos con train/test split')
     parser.add_argument('--train-end',  default='2023-12-31', help='Fin del período de entrenamiento (default 2023-12-31)')
     parser.add_argument('--timeframe',  default='1d', choices=['1d','1wk'], help='Timeframe: 1d (diario) o 1wk (semanal)')
+    parser.add_argument('--portfolio',  action='store_true', help='Mostrar estadísticas consolidadas del portfolio')
     args = parser.parse_args()
 
     tickers = [t.upper() for t in args.tickers]
@@ -648,6 +711,10 @@ def main():
                 print('sin datos suficientes')
 
         print_summary_table(results)
+
+        if args.portfolio and results:
+            ann = 52 if args.timeframe == '1wk' else 252
+            portfolio_stats([r for r in results if r], ann_factor=ann)
 
         pass_count = sum(1 for r in results if evaluate(r)[0] == 'PASS')
         marginal   = sum(1 for r in results if evaluate(r)[0] == 'MARGINAL')
