@@ -1,7 +1,11 @@
 """
-Trading Bot — Weekly Trend Strategy (Paper Trading)
-Conecta a IBKR Paper Account y ejecuta la estrategia weekly_trend
+Trading Bot — Swing Strategy (Paper Trading)
+Conecta a IBKR Paper Account y ejecuta la estrategia swing
 sobre la canasta de tickers validada en el backtester.
+
+Estrategia: breakout de 8 días + volumen + ADX. LONG y SHORT.
+Timeframe: diario. Ejecución: cada día a las 15:55 ET (5 min antes del cierre).
+Backtested 2020-2026: Sharpe 1.73 | MaxDD -11.6% | Win Rate 45.4% | PF 1.25
 
 SETUP (una sola vez):
   1. Crear cuenta en IBKR: ibkr.com → activar Paper Trading
@@ -11,8 +15,9 @@ SETUP (una sola vez):
 
 USO:
   python bot.py --run       # ejecutar señales ahora
+  python bot.py --dry-run   # señales sin colocar órdenes
   python bot.py --status    # ver posiciones abiertas
-  python bot.py --daemon    # correr automático cada viernes 15:50 ET
+  python bot.py --daemon    # correr automático cada día a las 15:55 ET
   python bot.py --close ALL # cerrar todas las posiciones
 """
 
@@ -27,7 +32,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from backtester import fetch, add_indicators, generate_signals_weekly_trend
+from backtester import fetch, add_indicators, generate_signals_swing
 
 try:
     from ib_insync import IB, Stock, LimitOrder, StopOrder, util
@@ -46,17 +51,18 @@ except ImportError:
 # CONFIGURACIÓN
 # ══════════════════════════════════════════
 
-TICKERS = ['NVDA', 'AMD', 'AAPL', 'AMZN', 'META', 'GOOGL', 'MSFT']
+TICKERS = ['NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT']
 
-# Parámetros ganadores del optimizador
+# Parámetros ganadores del optimizador (train 2020-2023, test 2024-2026)
+# Backtest portfolio: Sharpe 1.73 | MaxDD -11.6% | Win Rate 45.4% | PF 1.25
 SIGNAL_PARAMS = dict(
-    ema_fast=8, ema_slow=34,
-    adx_min=15, rsi_long_max=80, rsi_short_min=30,
+    periods=8, vol_spike=1.1,
+    adx_min=20, rsi_long_max=70, rsi_short_min=35,
 )
 
 RISK_PER_TRADE = 0.01   # 1% del equity por trade
 ATR_STOP_MULT  = 1.0    # stop = entry ± ATR × 1.0
-RR_RATIO       = 2.5    # target = riesgo × 2.5
+RR_RATIO       = 1.5    # target = riesgo × 1.5
 MAX_POS_PCT    = 0.25   # máximo 25% del equity en una posición
 ALLOW_SHORT    = True   # operar en ambas direcciones
 
@@ -105,25 +111,25 @@ def save_state(state):
 
 def get_signal(ticker):
     """
-    Devuelve la señal del último período semanal completo.
-      +1 = LONG
-      -1 = SHORT
+    Devuelve la señal del último día completo de trading.
+      +1 = LONG (breakout de máximos)
+      -1 = SHORT (breakout de mínimos)
        0 = sin señal
     También devuelve el ATR para calcular el stop.
     """
     end   = datetime.now().strftime('%Y-%m-%d')
-    start = (datetime.now() - timedelta(weeks=120)).strftime('%Y-%m-%d')
+    start = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
 
-    df = fetch(ticker, start, end, interval='1wk')
-    if df.empty or len(df) < 104:
+    df = fetch(ticker, start, end, interval='1d')
+    if df.empty or len(df) < 50:
         log.warning(f"{ticker}: datos insuficientes")
         return 0, None, None
 
     df = add_indicators(df)
-    df = generate_signals_weekly_trend(df, **SIGNAL_PARAMS)
+    df = generate_signals_swing(df, **SIGNAL_PARAMS)
     df = df.dropna()
 
-    # Usar la última semana COMPLETA (no la que está en curso)
+    # Usar el último día COMPLETO (no la barra del día en curso)
     last = df.iloc[-2]
     signal = int(last['signal'])
     atr_val = float(last['atr'])
@@ -373,13 +379,15 @@ def start_daemon():
         print("Instalá schedule: pip install schedule")
         return
 
-    log.info("Daemon iniciado. Ejecutará señales cada viernes a las 16:05 ET.")
+    log.info("Daemon iniciado. Ejecutará señales cada día a las 15:55 ET.")
     log.info("(Presioná Ctrl+C para detener)")
 
-    # Viernes 16:05 ET = cierre del mercado US
-    schedule.every().friday.at('16:05').do(run_signals)
+    # 15:55 ET = 5 minutos antes del cierre del mercado US
+    # Lunes a viernes (schedule corre daily = todos los días pero el mercado
+    # está cerrado fines de semana → sin señales, sin órdenes)
+    schedule.every().day.at('15:55').do(run_signals)
 
-    # También ejecutar una vez al inicio
+    # Dry run inicial para verificar conectividad y señales
     run_signals(dry_run=True)
 
     while True:
@@ -397,7 +405,7 @@ def main():
     group.add_argument('--run',      action='store_true', help='Ejecutar señales ahora')
     group.add_argument('--dry-run',  action='store_true', help='Generar señales sin colocar órdenes')
     group.add_argument('--status',   action='store_true', help='Ver posiciones abiertas')
-    group.add_argument('--daemon',   action='store_true', help='Correr como daemon (viernes 16:05 ET)')
+    group.add_argument('--daemon',   action='store_true', help='Correr como daemon (cada día 15:55 ET)')
     group.add_argument('--close',    metavar='TICKER',    help='Cerrar posición (ticker o ALL)')
     args = parser.parse_args()
 

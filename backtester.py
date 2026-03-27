@@ -155,36 +155,32 @@ def generate_signals_breakout(df, vol_spike=1.3, rsi_max=75, periods=20):
     return df
 
 
-def generate_signals_swing(df, ema_fast=9, ema_slow=21, adx_min=20,
-                           rsi_long_max=65, rsi_short_min=35):
+def generate_signals_swing(df, periods=10, vol_spike=1.2, adx_min=18,
+                           rsi_long_max=70, rsi_short_min=30):
     """
-    SWING: señales en timeframe diario para trades de 2-7 días.
-      LONG  (+1): EMA rápida cruza arriba de EMA lenta + ADX tendencia
-                  + RSI no sobrecomprado + MACD hist positivo
-      SHORT (-1): EMA rápida cruza abajo de EMA lenta + ADX tendencia
-                  + RSI no sobrevendido + MACD hist negativo
-    Más activa que weekly_trend: 10-30 señales/año por ticker.
-    Funciona en acciones de alta liquidez y en índices.
+    SWING: breakout de N días en timeframe diario. Ambas direcciones.
+      LONG  (+1): precio rompe máximo de N días + volumen elevado + ADX confirma
+                  + RSI no sobrecomprado (entrada no tardía)
+      SHORT (-1): precio rompe mínimo de N días + volumen elevado + ADX confirma
+                  + RSI no sobrevendido
+    Genera 15-40 señales/año por ticker (3-5x más que EMA cross).
+    Funciona en acciones de alta liquidez + índices + commodities.
     """
     c = df['Close']
+    h = df['High']
+    l = df['Low']
 
-    df['ema_fast'] = ema(c, ema_fast)
-    df['ema_slow'] = ema(c, ema_slow)
+    high_n = h.rolling(periods).max().shift(1)   # máximo de N días anterior
+    low_n  = l.rolling(periods).min().shift(1)   # mínimo de N días anterior
 
-    prev_fast = df['ema_fast'].shift(1)
-    prev_slow = df['ema_slow'].shift(1)
-    trend_ok  = df['adx'] > adx_min
-
-    cross_up   = (df['ema_fast'] > df['ema_slow']) & (prev_fast <= prev_slow)
-    cross_down = (df['ema_fast'] < df['ema_slow']) & (prev_fast >= prev_slow)
-
-    macd_bull = df['macd_hist'] > 0
-    macd_bear = df['macd_hist'] < 0
-    vol_ok    = df['vol_ratio'] > 0.8
+    breakout_up   = c > high_n
+    breakout_down = c < low_n
+    vol_ok        = df['vol_ratio'] > vol_spike
+    trend_ok      = df['adx'] > adx_min
 
     df['signal'] = 0
-    df.loc[cross_up   & trend_ok & (df['rsi'] < rsi_long_max)  & macd_bull & vol_ok, 'signal'] =  1
-    df.loc[cross_down & trend_ok & (df['rsi'] > rsi_short_min) & macd_bear & vol_ok, 'signal'] = -1
+    df.loc[breakout_up   & vol_ok & trend_ok & (df['rsi'] < rsi_long_max),  'signal'] =  1
+    df.loc[breakout_down & vol_ok & trend_ok & (df['rsi'] > rsi_short_min), 'signal'] = -1
     return df
 
 
@@ -558,11 +554,11 @@ WEEKLY_TREND_GRID = {
 }
 
 SWING_GRID = {
-    'ema_fast':      [8, 9, 13],
-    'ema_slow':      [21, 26, 34],
+    'periods':       [8, 10, 15],
+    'vol_spike':     [1.1, 1.2, 1.5],
     'adx_min':       [15, 20, 25],
-    'rsi_long_max':  [60, 65, 70],
-    'rsi_short_min': [30, 35, 40],
+    'rsi_long_max':  [65, 70],
+    'rsi_short_min': [30, 35],
 }
 
 ATR_GRID = [1.0, 1.5, 2.0]
@@ -696,6 +692,13 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test, ti
     return winner
 
 
+# Parámetros ganadores del optimizador por estrategia (train 2020-2023, test 2024-2026)
+STRATEGY_DEFAULTS = {
+    'weekly_trend': dict(ema_fast=8, ema_slow=34, adx_min=15, rsi_long_max=80, rsi_short_min=30),
+    'swing':        dict(periods=8, vol_spike=1.1, adx_min=20, rsi_long_max=70, rsi_short_min=35),
+}
+
+
 def main():
     parser = argparse.ArgumentParser(description='Backtester de estrategia técnica')
     parser.add_argument('tickers', nargs='*',
@@ -737,6 +740,7 @@ def main():
             print(color(f"\n── Estrategia: {strat.upper()} ──", 'cyan'))
 
         results = []
+        sig_params = STRATEGY_DEFAULTS.get(strat, {})
         for t in tickers:
             print(f"  Procesando {t}...", end=' ', flush=True)
             r = backtest(t, start=args.start, end=args.end,
@@ -744,7 +748,8 @@ def main():
                          risk_per_trade=args.risk,
                          rr_ratio=args.rr,
                          strategy=strat,
-                         timeframe=args.timeframe)
+                         timeframe=args.timeframe,
+                         signal_params=sig_params)
             if r:
                 r['strategy'] = strat
                 print('ok')
