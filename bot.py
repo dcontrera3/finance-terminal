@@ -51,7 +51,8 @@ except ImportError:
 # CONFIGURACIÓN
 # ══════════════════════════════════════════
 
-TICKERS = ['NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT']
+TICKERS = ['NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT',
+           'AMZN', 'GLD', 'SPY', 'QQQ', 'VIST']
 
 # Parámetros ganadores del optimizador (train 2020-2023, test 2024-2026)
 # Backtest portfolio: Sharpe 1.73 | MaxDD -11.6% | Win Rate 45.4% | PF 1.25
