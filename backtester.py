@@ -58,19 +58,37 @@ def bollinger(series, period=20, std_mult=2):
     return mid + std_mult * sigma, mid, mid - std_mult * sigma
 
 
+def adx(high, low, close, period=14):
+    """Average Directional Index — mide fuerza de tendencia (no dirección)."""
+    h_diff   = high.diff()
+    l_diff   = -low.diff()
+    plus_dm  = h_diff.where((h_diff > l_diff) & (h_diff > 0), 0.0)
+    minus_dm = l_diff.where((l_diff > h_diff) & (l_diff > 0), 0.0)
+    tr_raw = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low  - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+    atr_s    = tr_raw.ewm(span=period, adjust=False).mean()
+    plus_di  = 100 * plus_dm.ewm(span=period, adjust=False).mean() / atr_s
+    minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / atr_s
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    return dx.ewm(span=period, adjust=False).mean()
+
+
 # ══════════════════════════════════════════
 # FETCH DE DATOS (con cache en memoria)
 # ══════════════════════════════════════════
 
 _DATA_CACHE = {}
 
-def fetch(ticker, start, end):
-    key = (ticker, start, end)
+def fetch(ticker, start, end, interval='1d'):
+    key = (ticker, start, end, interval)
     if key in _DATA_CACHE:
         return _DATA_CACHE[key]
     try:
         raw = yf.download(ticker, start=start, end=end,
-                          interval='1d', auto_adjust=True, progress=False,
+                          interval=interval, auto_adjust=True, progress=False,
                           timeout=15)
     except Exception:
         _DATA_CACHE[key] = pd.DataFrame()
@@ -98,8 +116,9 @@ def add_indicators(df):
     df['rsi']    = rsi(c)
     df['macd_line'], df['macd_sig'], df['macd_hist'] = macd(c)
     df['atr']    = atr(h, l, c)
+    df['adx']    = adx(h, l, c)
     df['bb_upper'], df['bb_mid'], df['bb_lower'] = bollinger(c)
-    df['vol_ma'] = v.rolling(20).mean()
+    df['vol_ma']    = v.rolling(20).mean()
     df['vol_ratio'] = v / df['vol_ma']
     return df
 
@@ -136,9 +155,37 @@ def generate_signals_breakout(df, vol_spike=1.3, rsi_max=75, periods=20):
     return df
 
 
+def generate_signals_weekly_trend(df, ema_fast=10, ema_slow=20, adx_min=20, rsi_long_max=75, rsi_short_min=25):
+    """
+    WEEKLY TREND: sigue la tendencia semanal con cruce de EMAs.
+      LONG  (+1): EMA rápida cruza arriba de EMA lenta + ADX confirma tendencia.
+      SHORT (-1): EMA rápida cruza abajo de EMA lenta + ADX confirma tendencia.
+    Diseñada para datos semanales. Captura movimientos de semanas a meses.
+    Evita mercados laterales via ADX > adx_min.
+    """
+    c = df['Close']
+
+    df['ema_fast'] = ema(c, ema_fast)
+    df['ema_slow'] = ema(c, ema_slow)
+
+    prev_fast  = df['ema_fast'].shift(1)
+    prev_slow  = df['ema_slow'].shift(1)
+    trend_ok   = df['adx'] > adx_min
+
+    cross_up   = (df['ema_fast'] > df['ema_slow']) & (prev_fast <= prev_slow)
+    cross_down = (df['ema_fast'] < df['ema_slow']) & (prev_fast >= prev_slow)
+
+    df['signal'] = 0
+    df.loc[cross_up   & trend_ok & (df['rsi'] < rsi_long_max),  'signal'] =  1
+    df.loc[cross_down & trend_ok & (df['rsi'] > rsi_short_min), 'signal'] = -1
+    return df
+
+
 def generate_signals(df, strategy='breakout', **params):
     if strategy == 'pullback':
         return generate_signals_pullback(df, **params)
+    if strategy == 'weekly_trend':
+        return generate_signals_weekly_trend(df, **params)
     return generate_signals_breakout(df, **params)
 
 
@@ -152,12 +199,17 @@ def backtest(ticker, start='2020-01-01', end=None,
              atr_stop_mult=1.5,
              rr_ratio=2.0,
              strategy='breakout',
+             timeframe='1d',
              signal_params=None):
     if end is None:
         end = datetime.now().strftime('%Y-%m-%d')
 
-    raw = fetch(ticker, start, end)
-    if raw.empty or len(raw) < 250:
+    is_weekly  = (timeframe == '1wk')
+    min_bars   = 104 if is_weekly else 250  # 2 años de semanas o ~1 año de días
+    ann_factor = 52  if is_weekly else 252
+
+    raw = fetch(ticker, start, end, interval=timeframe)
+    if raw.empty or len(raw) < min_bars:
         return None
 
     df = add_indicators(raw)
@@ -165,7 +217,7 @@ def backtest(ticker, start='2020-01-01', end=None,
     df = df.dropna()
 
     capital  = float(initial_capital)
-    position = None  # dict con los datos del trade abierto
+    position = None
     trades   = []
     equity   = []
 
@@ -182,40 +234,49 @@ def backtest(ticker, start='2020-01-01', end=None,
             high = float(row['High'])
             sl   = position['stop']
             tp   = position['target']
+            d    = position['dir']
 
-            if low <= sl:
-                # Stop loss tocado — salida al SL (worst case del día)
-                pnl = (sl - position['entry']) * position['size']
+            sl_hit = (low <= sl) if d == 'LONG' else (high >= sl)
+            tp_hit = (high >= tp) if d == 'LONG' else (low <= tp)
+
+            if sl_hit:
+                pnl = (sl - position['entry']) * position['size'] * (1 if d == 'LONG' else -1)
                 capital += pnl
                 trades.append({**position, 'exit': sl, 'exit_date': date,
                                'pnl': pnl, 'result': 'SL'})
                 position = None
 
-            elif high >= tp:
-                # Take profit tocado
-                pnl = (tp - position['entry']) * position['size']
+            elif tp_hit:
+                pnl = (tp - position['entry']) * position['size'] * (1 if d == 'LONG' else -1)
                 capital += pnl
                 trades.append({**position, 'exit': tp, 'exit_date': date,
                                'pnl': pnl, 'result': 'TP'})
                 position = None
 
-        # ── Abrir nueva posición ────────────────────────────────────
-        if position is None and prev['signal'] == 1:
-            entry        = float(row['Open'])   # entramos al open del día siguiente
-            stop_dist    = float(prev['atr']) * atr_stop_mult
-            stop         = entry - stop_dist
-            target       = entry + stop_dist * rr_ratio
+        # ── Abrir nueva posición (LONG o SHORT) ─────────────────────
+        sig = int(prev['signal'])
+        if position is None and sig in (1, -1):
+            entry     = float(row['Open'])
+            stop_dist = float(prev['atr']) * atr_stop_mult
+            if stop_dist <= 0 or entry <= 0:
+                continue
 
-            risk_usd     = capital * risk_per_trade
-            size         = risk_usd / stop_dist  # shares
+            if sig == 1:   # LONG
+                stop   = entry - stop_dist
+                target = entry + stop_dist * rr_ratio
+            else:          # SHORT
+                stop   = entry + stop_dist
+                target = entry - stop_dist * rr_ratio
 
-            # No invertir más del 25% del capital en una sola posición
+            risk_usd = capital * risk_per_trade
+            size     = risk_usd / stop_dist
             max_size = (capital * 0.25) / entry
             size     = min(size, max_size)
 
-            if size > 0 and entry > 0:
+            if size > 0:
                 position = {
                     'ticker':     ticker,
+                    'dir':        'LONG' if sig == 1 else 'SHORT',
                     'entry':      entry,
                     'stop':       stop,
                     'target':     target,
@@ -226,7 +287,8 @@ def backtest(ticker, start='2020-01-01', end=None,
     # Cerrar posición abierta al último precio
     if position:
         exit_price = float(df.iloc[-1]['Close'])
-        pnl = (exit_price - position['entry']) * position['size']
+        d   = position['dir']
+        pnl = (exit_price - position['entry']) * position['size'] * (1 if d == 'LONG' else -1)
         capital += pnl
         trades.append({**position, 'exit': exit_price,
                        'exit_date': df.index[-1], 'pnl': pnl, 'result': 'OPEN'})
@@ -235,10 +297,10 @@ def backtest(ticker, start='2020-01-01', end=None,
 
     # ── Métricas ────────────────────────────────────────────────────
     eq = pd.Series(equity)
-    daily_ret = eq.pct_change().dropna()
+    period_ret = eq.pct_change().dropna()
 
-    sharpe = (daily_ret.mean() / daily_ret.std() * np.sqrt(252)
-              if daily_ret.std() > 0 else 0.0)
+    sharpe = (period_ret.mean() / period_ret.std() * np.sqrt(ann_factor)
+              if period_ret.std() > 0 else 0.0)
 
     rolling_max = eq.cummax()
     max_dd = float(((eq - rolling_max) / rolling_max).min() * 100)
@@ -263,6 +325,8 @@ def backtest(ticker, start='2020-01-01', end=None,
 
     return {
         'ticker':         ticker,
+        'strategy':       strategy,
+        'timeframe':      timeframe,
         'period':         f'{start} → {end}',
         'initial':        initial_capital,
         'final':          round(capital, 2),
@@ -289,7 +353,8 @@ def evaluate(result):
     Semáforo de calidad: PASS / MARGINAL / FAIL
     Un backtest tiene que pasar TODOS los criterios para ir a paper trading.
     """
-    min_trades = 5 if result.get('strategy') == 'breakout' else 10
+    strat = result.get('strategy', '')
+    min_trades = 3 if strat == 'weekly_trend' else (5 if strat == 'breakout' else 10)
     if not result or result['n_trades'] < min_trades:
         return 'FAIL', f"Solo {result['n_trades'] if result else 0} trades — muestra insuficiente"
 
@@ -387,6 +452,14 @@ BREAKOUT_GRID = {
     'periods':   [15, 20, 30],
 }
 
+WEEKLY_TREND_GRID = {
+    'ema_fast':      [8, 10, 13],
+    'ema_slow':      [20, 26, 34],
+    'adx_min':       [15, 20, 25],
+    'rsi_long_max':  [70, 75, 80],
+    'rsi_short_min': [20, 25, 30],
+}
+
 ATR_GRID = [1.0, 1.5, 2.0]
 RR_GRID  = [1.5, 2.0, 2.5, 3.0]
 
@@ -400,33 +473,36 @@ def grid_combinations(param_grid):
         yield dict(zip(keys, combo))
 
 
-def score_combo(tickers, start, end, strategy, signal_params, atr_mult, rr):
+def score_combo(tickers, start, end, strategy, signal_params, atr_mult, rr, timeframe='1d'):
     """
     Corre backtest en todos los tickers y devuelve un score compuesto.
-    Score = media de Sharpe, penalizado por tickers con MaxDD < -20% o < 10 trades.
+    Score = media de Sharpe, penalizado por tickers con MaxDD < -20%.
     """
+    strat_min = {'weekly_trend': 3, 'breakout': 5}.get(strategy, 10)
     sharpes = []
     for t in tickers:
         r = backtest(t, start=start, end=end, initial_capital=10_000,
                      risk_per_trade=0.01, atr_stop_mult=atr_mult,
-                     rr_ratio=rr, strategy=strategy, signal_params=signal_params)
-        if not r or r['n_trades'] < 10:
+                     rr_ratio=rr, strategy=strategy, timeframe=timeframe,
+                     signal_params=signal_params)
+        if not r or r['n_trades'] < strat_min:
             sharpes.append(-1.0)
         elif r['max_drawdown'] < -20:
-            sharpes.append(r['sharpe'] * 0.5)  # penalizar drawdown excesivo
+            sharpes.append(r['sharpe'] * 0.5)
         else:
             sharpes.append(r['sharpe'])
     return float(np.mean(sharpes))
 
 
-def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
+def optimize(tickers, strategy, start_train, end_train, start_test, end_test, timeframe='1d'):
     """
     1. Grid search en el período de entrenamiento.
     2. Toma los 3 mejores combos.
     3. Valida en el período de test (datos que el optimizador no vio).
     4. El combo que mantiene mejor Sharpe en test es el ganador.
     """
-    signal_grid = PULLBACK_GRID if strategy == 'pullback' else BREAKOUT_GRID
+    signal_grid = {'pullback': PULLBACK_GRID, 'breakout': BREAKOUT_GRID,
+                   'weekly_trend': WEEKLY_TREND_GRID}.get(strategy, BREAKOUT_GRID)
     total = (sum(1 for _ in grid_combinations(signal_grid))
              * len(ATR_GRID) * len(RR_GRID))
 
@@ -438,9 +514,10 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
     print("  Descargando datos...", end=' ', flush=True)
     valid_tickers = []
     for t in tickers:
-        df_train = fetch(t, start_train, end_train)
-        fetch(t, start_test, end_test)  # también el período de test
-        if not df_train.empty and len(df_train) >= 250:
+        df_train = fetch(t, start_train, end_train, interval=timeframe)
+        fetch(t, start_test, end_test, interval=timeframe)
+        min_bars = 104 if timeframe == '1wk' else 250
+        if not df_train.empty and len(df_train) >= min_bars:
             valid_tickers.append(t)
             print(t, end=' ', flush=True)
         else:
@@ -454,7 +531,7 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
         for atr in ATR_GRID:
             for rr in RR_GRID:
                 s = score_combo(tickers, start_train, end_train,
-                                strategy, sp, atr, rr)
+                                strategy, sp, atr, rr, timeframe=timeframe)
                 best.append((s, sp, atr, rr))
                 done += 1
                 if done % 50 == 0:
@@ -485,7 +562,7 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
             r = backtest(t, start=start_test, end=end_test,
                          initial_capital=10_000, risk_per_trade=0.01,
                          atr_stop_mult=atr, rr_ratio=rr,
-                         strategy=strategy, signal_params=sp)
+                         strategy=strategy, timeframe=timeframe, signal_params=sp)
             if r:
                 verdict, _ = evaluate(r)
                 vc = verdict_color(verdict)
@@ -523,12 +600,14 @@ def main():
     parser.add_argument('--capital', default=10_000, type=float, help='Capital inicial en USD')
     parser.add_argument('--risk',    default=0.01,   type=float, help='Riesgo por trade (default 0.01 = 1%%)')
     parser.add_argument('--rr',       default=2.0,    type=float, help='Risk/Reward ratio (default 2.0)')
-    parser.add_argument('--strategy', default='breakout', choices=['breakout','pullback'],
-                        help='Estrategia: breakout (default) o pullback')
+    parser.add_argument('--strategy', default='breakout',
+                        choices=['breakout', 'pullback', 'weekly_trend'],
+                        help='Estrategia: breakout, pullback, weekly_trend')
     parser.add_argument('--compare',  action='store_true', help='Comparar ambas estrategias')
     parser.add_argument('--detail',   action='store_true', help='Mostrar detalle por ticker')
     parser.add_argument('--optimize', action='store_true', help='Buscar parámetros óptimos con train/test split')
-    parser.add_argument('--train-end', default='2023-12-31', help='Fin del período de entrenamiento (default 2023-12-31)')
+    parser.add_argument('--train-end',  default='2023-12-31', help='Fin del período de entrenamiento (default 2023-12-31)')
+    parser.add_argument('--timeframe',  default='1d', choices=['1d','1wk'], help='Timeframe: 1d (diario) o 1wk (semanal)')
     args = parser.parse_args()
 
     tickers = [t.upper() for t in args.tickers]
@@ -537,7 +616,8 @@ def main():
         strat = args.strategy if not args.compare else 'pullback'
         optimize(tickers, strategy=strat,
                  start_train=args.start, end_train=args.train_end,
-                 start_test=args.train_end, end_test=args.end or datetime.now().strftime('%Y-%m-%d'))
+                 start_test=args.train_end, end_test=args.end or datetime.now().strftime('%Y-%m-%d'),
+                 timeframe=args.timeframe)
         return
 
     print(color(f"\nBacktesting {len(tickers)} ticker(s) | {args.start} → {args.end or 'hoy'} "
@@ -556,7 +636,8 @@ def main():
                          initial_capital=args.capital,
                          risk_per_trade=args.risk,
                          rr_ratio=args.rr,
-                         strategy=strat)
+                         strategy=strat,
+                         timeframe=args.timeframe)
             if r:
                 r['strategy'] = strat
                 print('ok')
