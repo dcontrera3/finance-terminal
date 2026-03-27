@@ -155,6 +155,39 @@ def generate_signals_breakout(df, vol_spike=1.3, rsi_max=75, periods=20):
     return df
 
 
+def generate_signals_swing(df, ema_fast=9, ema_slow=21, adx_min=20,
+                           rsi_long_max=65, rsi_short_min=35):
+    """
+    SWING: señales en timeframe diario para trades de 2-7 días.
+      LONG  (+1): EMA rápida cruza arriba de EMA lenta + ADX tendencia
+                  + RSI no sobrecomprado + MACD hist positivo
+      SHORT (-1): EMA rápida cruza abajo de EMA lenta + ADX tendencia
+                  + RSI no sobrevendido + MACD hist negativo
+    Más activa que weekly_trend: 10-30 señales/año por ticker.
+    Funciona en acciones de alta liquidez y en índices.
+    """
+    c = df['Close']
+
+    df['ema_fast'] = ema(c, ema_fast)
+    df['ema_slow'] = ema(c, ema_slow)
+
+    prev_fast = df['ema_fast'].shift(1)
+    prev_slow = df['ema_slow'].shift(1)
+    trend_ok  = df['adx'] > adx_min
+
+    cross_up   = (df['ema_fast'] > df['ema_slow']) & (prev_fast <= prev_slow)
+    cross_down = (df['ema_fast'] < df['ema_slow']) & (prev_fast >= prev_slow)
+
+    macd_bull = df['macd_hist'] > 0
+    macd_bear = df['macd_hist'] < 0
+    vol_ok    = df['vol_ratio'] > 0.8
+
+    df['signal'] = 0
+    df.loc[cross_up   & trend_ok & (df['rsi'] < rsi_long_max)  & macd_bull & vol_ok, 'signal'] =  1
+    df.loc[cross_down & trend_ok & (df['rsi'] > rsi_short_min) & macd_bear & vol_ok, 'signal'] = -1
+    return df
+
+
 def generate_signals_weekly_trend(df, ema_fast=10, ema_slow=20, adx_min=20, rsi_long_max=75, rsi_short_min=25):
     """
     WEEKLY TREND: sigue la tendencia semanal con cruce de EMAs.
@@ -186,6 +219,8 @@ def generate_signals(df, strategy='breakout', **params):
         return generate_signals_pullback(df, **params)
     if strategy == 'weekly_trend':
         return generate_signals_weekly_trend(df, **params)
+    if strategy == 'swing':
+        return generate_signals_swing(df, **params)
     return generate_signals_breakout(df, **params)
 
 
@@ -354,7 +389,7 @@ def evaluate(result):
     Un backtest tiene que pasar TODOS los criterios para ir a paper trading.
     """
     strat = result.get('strategy', '')
-    min_trades = 3 if strat == 'weekly_trend' else (5 if strat == 'breakout' else 10)
+    min_trades = {'weekly_trend': 3, 'breakout': 5, 'swing': 8}.get(strat, 10)
     if not result or result['n_trades'] < min_trades:
         return 'FAIL', f"Solo {result['n_trades'] if result else 0} trades — muestra insuficiente"
 
@@ -522,6 +557,14 @@ WEEKLY_TREND_GRID = {
     'rsi_short_min': [20, 25, 30],
 }
 
+SWING_GRID = {
+    'ema_fast':      [8, 9, 13],
+    'ema_slow':      [21, 26, 34],
+    'adx_min':       [15, 20, 25],
+    'rsi_long_max':  [60, 65, 70],
+    'rsi_short_min': [30, 35, 40],
+}
+
 ATR_GRID = [1.0, 1.5, 2.0]
 RR_GRID  = [1.5, 2.0, 2.5, 3.0]
 
@@ -540,7 +583,7 @@ def score_combo(tickers, start, end, strategy, signal_params, atr_mult, rr, time
     Corre backtest en todos los tickers y devuelve un score compuesto.
     Score = media de Sharpe, penalizado por tickers con MaxDD < -20%.
     """
-    strat_min = {'weekly_trend': 3, 'breakout': 5}.get(strategy, 10)
+    strat_min = {'weekly_trend': 3, 'breakout': 5, 'swing': 8}.get(strategy, 10)
     sharpes = []
     for t in tickers:
         r = backtest(t, start=start, end=end, initial_capital=10_000,
@@ -564,7 +607,8 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test, ti
     4. El combo que mantiene mejor Sharpe en test es el ganador.
     """
     signal_grid = {'pullback': PULLBACK_GRID, 'breakout': BREAKOUT_GRID,
-                   'weekly_trend': WEEKLY_TREND_GRID}.get(strategy, BREAKOUT_GRID)
+                   'weekly_trend': WEEKLY_TREND_GRID,
+                   'swing': SWING_GRID}.get(strategy, BREAKOUT_GRID)
     total = (sum(1 for _ in grid_combinations(signal_grid))
              * len(ATR_GRID) * len(RR_GRID))
 
@@ -663,7 +707,7 @@ def main():
     parser.add_argument('--risk',    default=0.01,   type=float, help='Riesgo por trade (default 0.01 = 1%%)')
     parser.add_argument('--rr',       default=2.0,    type=float, help='Risk/Reward ratio (default 2.0)')
     parser.add_argument('--strategy', default='breakout',
-                        choices=['breakout', 'pullback', 'weekly_trend'],
+                        choices=['breakout', 'pullback', 'weekly_trend', 'swing'],
                         help='Estrategia: breakout, pullback, weekly_trend')
     parser.add_argument('--compare',  action='store_true', help='Comparar ambas estrategias')
     parser.add_argument('--detail',   action='store_true', help='Mostrar detalle por ticker')
