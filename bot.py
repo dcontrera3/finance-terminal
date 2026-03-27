@@ -35,7 +35,7 @@ import yfinance as yf
 from backtester import fetch, add_indicators, generate_signals_swing
 
 try:
-    from ib_insync import IB, Stock, LimitOrder, StopOrder, util
+    from ib_insync import IB, Stock, LimitOrder, StopOrder, MarketOrder, util
     IB_AVAILABLE = True
 except ImportError:
     IB_AVAILABLE = False
