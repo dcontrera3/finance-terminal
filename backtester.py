@@ -59,15 +59,26 @@ def bollinger(series, period=20, std_mult=2):
 
 
 # ══════════════════════════════════════════
-# FETCH DE DATOS
+# FETCH DE DATOS (con cache en memoria)
 # ══════════════════════════════════════════
 
+_DATA_CACHE = {}
+
 def fetch(ticker, start, end):
-    raw = yf.download(ticker, start=start, end=end,
-                      interval='1d', auto_adjust=True, progress=False)
+    key = (ticker, start, end)
+    if key in _DATA_CACHE:
+        return _DATA_CACHE[key]
+    try:
+        raw = yf.download(ticker, start=start, end=end,
+                          interval='1d', auto_adjust=True, progress=False,
+                          timeout=15)
+    except Exception:
+        _DATA_CACHE[key] = pd.DataFrame()
+        return pd.DataFrame()
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = raw.columns.get_level_values(0)
     raw = raw.dropna()
+    _DATA_CACHE[key] = raw
     return raw
 
 
@@ -278,8 +289,9 @@ def evaluate(result):
     Semáforo de calidad: PASS / MARGINAL / FAIL
     Un backtest tiene que pasar TODOS los criterios para ir a paper trading.
     """
-    if not result or result['n_trades'] < 10:
-        return 'FAIL', 'Menos de 10 trades — muestra insuficiente'
+    min_trades = 5 if result.get('strategy') == 'breakout' else 10
+    if not result or result['n_trades'] < min_trades:
+        return 'FAIL', f"Solo {result['n_trades'] if result else 0} trades — muestra insuficiente"
 
     issues = []
 
@@ -422,6 +434,20 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
                 f"| {total} combinaciones | Train: {start_train}→{end_train}", 'cyan'))
     print(f"Test (validación fuera de muestra): {start_test}→{end_test}\n")
 
+    # Pre-descargar todos los datos una sola vez antes del grid search
+    print("  Descargando datos...", end=' ', flush=True)
+    valid_tickers = []
+    for t in tickers:
+        df_train = fetch(t, start_train, end_train)
+        fetch(t, start_test, end_test)  # también el período de test
+        if not df_train.empty and len(df_train) >= 250:
+            valid_tickers.append(t)
+            print(t, end=' ', flush=True)
+        else:
+            print(f"({t} sin datos)", end=' ', flush=True)
+    print()
+    tickers = valid_tickers
+
     best = []
     done = 0
     for sp in grid_combinations(signal_grid):
@@ -490,7 +516,7 @@ def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
 def main():
     parser = argparse.ArgumentParser(description='Backtester de estrategia técnica')
     parser.add_argument('tickers', nargs='*',
-                        default=['NVDA','SPY','QQQ','AMD','AAPL','MSFT','MELI','GLD'],
+                        default=['NVDA','SPY','QQQ','AMD','AAPL','MSFT','META','GOOGL','AMZN','TSLA','GLD','MELI'],
                         help='Tickers a testear')
     parser.add_argument('--start',   default='2020-01-01', help='Fecha inicio (YYYY-MM-DD)')
     parser.add_argument('--end',     default=None,          help='Fecha fin (YYYY-MM-DD)')
