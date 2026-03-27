@@ -93,49 +93,42 @@ def add_indicators(df):
     return df
 
 
-def generate_signals_pullback(df):
+def generate_signals_pullback(df, rsi_min=40, rsi_max=65, pullback_pct=1.02, vol_min=0.8):
     """
     PULLBACK: entrada cuando el precio retrocede a la EMA 20/50 en tendencia alcista.
-    Funciona bien en mercados que respetan las medias (SPY, QQQ, large caps estables).
-    Falla en momentum stocks que no pullbackean (NVDA, AMD en bull runs).
+    Funciona bien en índices y large caps estables.
     """
     c = df['Close']
-
     trend    = c > df['ema200']
-    momentum = (df['rsi'] > 40) & (df['rsi'] < 65)
-    # Pullback: precio entre EMA50 y EMA20, o cerca de EMA20
-    pullback = (c <= df['ema20'] * 1.02) & (c >= df['ema50'] * 0.97)
-    vol_ok   = df['vol_ratio'] > 0.8
-
+    momentum = (df['rsi'] > rsi_min) & (df['rsi'] < rsi_max)
+    pullback = (c <= df['ema20'] * pullback_pct) & (c >= df['ema50'] * 0.97)
+    vol_ok   = df['vol_ratio'] > vol_min
     df['signal'] = 0
     df.loc[trend & momentum & pullback & vol_ok, 'signal'] = 1
     return df
 
 
-def generate_signals_breakout(df):
+def generate_signals_breakout(df, vol_spike=1.3, rsi_max=75, periods=20):
     """
-    BREAKOUT: entrada cuando el precio rompe máximos de 20 días con volumen.
-    Captura momentum stocks (NVDA, AMD) y tendencias sostenidas.
-    Más trades falsos en mercados laterales — el filtro EMA200 lo mitiga.
+    BREAKOUT: entrada cuando el precio rompe máximos de N días con volumen.
+    Captura momentum stocks y tendencias sostenidas.
     """
     c = df['Close']
     h = df['High']
-
-    high_20   = h.rolling(20).max().shift(1)   # máximo de los 20 días previos
-    trend     = c > df['ema200']               # solo en tendencia alcista
-    breakout  = c > high_20                    # rompe máximo reciente
-    vol_spike = df['vol_ratio'] > 1.3          # volumen 30% sobre promedio
-    rsi_ok    = df['rsi'] < 75                 # no comprar si RSI extremo
-
+    high_n   = h.rolling(periods).max().shift(1)
+    trend    = c > df['ema200']
+    breakout = c > high_n
+    vol_ok   = df['vol_ratio'] > vol_spike
+    rsi_ok   = df['rsi'] < rsi_max
     df['signal'] = 0
-    df.loc[trend & breakout & vol_spike & rsi_ok, 'signal'] = 1
+    df.loc[trend & breakout & vol_ok & rsi_ok, 'signal'] = 1
     return df
 
 
-def generate_signals(df, strategy='breakout'):
+def generate_signals(df, strategy='breakout', **params):
     if strategy == 'pullback':
-        return generate_signals_pullback(df)
-    return generate_signals_breakout(df)
+        return generate_signals_pullback(df, **params)
+    return generate_signals_breakout(df, **params)
 
 
 # ══════════════════════════════════════════
@@ -144,10 +137,11 @@ def generate_signals(df, strategy='breakout'):
 
 def backtest(ticker, start='2020-01-01', end=None,
              initial_capital=10_000,
-             risk_per_trade=0.01,   # 1% del portfolio por trade
-             atr_stop_mult=1.5,     # stop = entry - ATR × 1.5
-             rr_ratio=2.0,          # target = riesgo × rr_ratio
-             strategy='breakout'):  # 'breakout' o 'pullback'
+             risk_per_trade=0.01,
+             atr_stop_mult=1.5,
+             rr_ratio=2.0,
+             strategy='breakout',
+             signal_params=None):
     if end is None:
         end = datetime.now().strftime('%Y-%m-%d')
 
@@ -156,7 +150,7 @@ def backtest(ticker, start='2020-01-01', end=None,
         return None
 
     df = add_indicators(raw)
-    df = generate_signals(df, strategy=strategy)
+    df = generate_signals(df, strategy=strategy, **(signal_params or {}))
     df = df.dropna()
 
     capital  = float(initial_capital)
@@ -364,6 +358,135 @@ def print_detail(r):
     print(f"  Veredicto:      {color(verdict, vc)}  —  {reason}")
 
 
+# ══════════════════════════════════════════
+# OPTIMIZADOR — GRID SEARCH CON TRAIN/TEST
+# ══════════════════════════════════════════
+
+PULLBACK_GRID = {
+    'rsi_min':      [35, 40, 45],
+    'rsi_max':      [60, 65, 70],
+    'pullback_pct': [1.01, 1.02, 1.04],
+    'vol_min':      [0.7, 0.9, 1.1],
+}
+
+BREAKOUT_GRID = {
+    'vol_spike': [1.1, 1.3, 1.5, 2.0],
+    'rsi_max':   [70, 75, 80],
+    'periods':   [15, 20, 30],
+}
+
+ATR_GRID = [1.0, 1.5, 2.0]
+RR_GRID  = [1.5, 2.0, 2.5, 3.0]
+
+
+def grid_combinations(param_grid):
+    """Genera todas las combinaciones de un dict de listas."""
+    import itertools
+    keys   = list(param_grid.keys())
+    values = list(param_grid.values())
+    for combo in itertools.product(*values):
+        yield dict(zip(keys, combo))
+
+
+def score_combo(tickers, start, end, strategy, signal_params, atr_mult, rr):
+    """
+    Corre backtest en todos los tickers y devuelve un score compuesto.
+    Score = media de Sharpe, penalizado por tickers con MaxDD < -20% o < 10 trades.
+    """
+    sharpes = []
+    for t in tickers:
+        r = backtest(t, start=start, end=end, initial_capital=10_000,
+                     risk_per_trade=0.01, atr_stop_mult=atr_mult,
+                     rr_ratio=rr, strategy=strategy, signal_params=signal_params)
+        if not r or r['n_trades'] < 10:
+            sharpes.append(-1.0)
+        elif r['max_drawdown'] < -20:
+            sharpes.append(r['sharpe'] * 0.5)  # penalizar drawdown excesivo
+        else:
+            sharpes.append(r['sharpe'])
+    return float(np.mean(sharpes))
+
+
+def optimize(tickers, strategy, start_train, end_train, start_test, end_test):
+    """
+    1. Grid search en el período de entrenamiento.
+    2. Toma los 3 mejores combos.
+    3. Valida en el período de test (datos que el optimizador no vio).
+    4. El combo que mantiene mejor Sharpe en test es el ganador.
+    """
+    signal_grid = PULLBACK_GRID if strategy == 'pullback' else BREAKOUT_GRID
+    total = (sum(1 for _ in grid_combinations(signal_grid))
+             * len(ATR_GRID) * len(RR_GRID))
+
+    print(color(f"\nOptimizando {strategy.upper()} en {len(tickers)} tickers "
+                f"| {total} combinaciones | Train: {start_train}→{end_train}", 'cyan'))
+    print(f"Test (validación fuera de muestra): {start_test}→{end_test}\n")
+
+    best = []
+    done = 0
+    for sp in grid_combinations(signal_grid):
+        for atr in ATR_GRID:
+            for rr in RR_GRID:
+                s = score_combo(tickers, start_train, end_train,
+                                strategy, sp, atr, rr)
+                best.append((s, sp, atr, rr))
+                done += 1
+                if done % 50 == 0:
+                    print(f"  {done}/{total}...", end='\r', flush=True)
+
+    best.sort(key=lambda x: -x[0])
+    top3 = best[:3]
+
+    print(color("\nTop 3 combinaciones (train):", 'bold'))
+    header = f"{'#':<3} {'Score':>6}  {'ATR':>5}  {'R/R':>5}  Params señal"
+    print(header)
+    print('─' * 70)
+    for i, (sc, sp, atr, rr) in enumerate(top3, 1):
+        params_str = '  '.join(f"{k}={v}" for k, v in sp.items())
+        print(f"{i:<3} {sc:>6.3f}  {atr:>5.1f}  {rr:>5.1f}  {params_str}")
+
+    print(color("\nValidación fuera de muestra (test):", 'bold'))
+    header2 = (f"{'#':<3} {'Ticker':<7} {'Return%':>8} {'Sharpe':>7} "
+               f"{'MaxDD%':>8} {'WinRate':>8} {'Trades':>7}  Veredicto")
+    print(header2)
+    print('─' * 75)
+
+    winner = None
+    best_test_score = -999
+    for i, (train_score, sp, atr, rr) in enumerate(top3, 1):
+        test_scores = []
+        for t in tickers:
+            r = backtest(t, start=start_test, end=end_test,
+                         initial_capital=10_000, risk_per_trade=0.01,
+                         atr_stop_mult=atr, rr_ratio=rr,
+                         strategy=strategy, signal_params=sp)
+            if r:
+                verdict, _ = evaluate(r)
+                vc = verdict_color(verdict)
+                print(f"#{i}  {t:<7} {r['total_return']:>7.1f}% {r['sharpe']:>7.2f} "
+                      f"{r['max_drawdown']:>7.1f}% {r['win_rate']:>7.1f}% "
+                      f"{r['n_trades']:>7}  {color(verdict, vc)}")
+                test_scores.append(r['sharpe'] if r['n_trades'] >= 10 else -1)
+
+        avg_test = float(np.mean(test_scores)) if test_scores else -1
+        print(f"    {'→ Score test medio:':30} {avg_test:.3f}\n")
+        if avg_test > best_test_score:
+            best_test_score = avg_test
+            winner = (sp, atr, rr)
+
+    if winner:
+        sp, atr, rr = winner
+        print(color("PARÁMETROS GANADORES (train + test):", 'green'))
+        print(f"  Estrategia:  {strategy}")
+        print(f"  ATR stop:    {atr}×")
+        print(f"  R/R ratio:   {rr}:1")
+        for k, v in sp.items():
+            print(f"  {k:<15} {v}")
+        print(f"  Score test:  {best_test_score:.3f}")
+
+    return winner
+
+
 def main():
     parser = argparse.ArgumentParser(description='Backtester de estrategia técnica')
     parser.add_argument('tickers', nargs='*',
@@ -376,11 +499,20 @@ def main():
     parser.add_argument('--rr',       default=2.0,    type=float, help='Risk/Reward ratio (default 2.0)')
     parser.add_argument('--strategy', default='breakout', choices=['breakout','pullback'],
                         help='Estrategia: breakout (default) o pullback')
-    parser.add_argument('--compare', action='store_true', help='Comparar ambas estrategias')
-    parser.add_argument('--detail',  action='store_true', help='Mostrar detalle por ticker')
+    parser.add_argument('--compare',  action='store_true', help='Comparar ambas estrategias')
+    parser.add_argument('--detail',   action='store_true', help='Mostrar detalle por ticker')
+    parser.add_argument('--optimize', action='store_true', help='Buscar parámetros óptimos con train/test split')
+    parser.add_argument('--train-end', default='2023-12-31', help='Fin del período de entrenamiento (default 2023-12-31)')
     args = parser.parse_args()
 
     tickers = [t.upper() for t in args.tickers]
+
+    if args.optimize:
+        strat = args.strategy if not args.compare else 'pullback'
+        optimize(tickers, strategy=strat,
+                 start_train=args.start, end_train=args.train_end,
+                 start_test=args.train_end, end_test=args.end or datetime.now().strftime('%Y-%m-%d'))
+        return
 
     print(color(f"\nBacktesting {len(tickers)} ticker(s) | {args.start} → {args.end or 'hoy'} "
                 f"| Capital: ${args.capital:,.0f} | Riesgo: {args.risk*100:.1f}% | R/R: {args.rr}:1", 'bold'))
