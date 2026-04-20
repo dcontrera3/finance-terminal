@@ -1,0 +1,21 @@
+# Secretos y env vars
+.env
+.env.local
+*.pem
+
+# Estado y logs del bot
+bot.log
+bot_state.json
+sessionID.txt
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
