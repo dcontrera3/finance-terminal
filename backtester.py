@@ -210,6 +210,47 @@ def generate_signals_weekly_trend(df, ema_fast=10, ema_slow=20, adx_min=20, rsi_
     return df
 
 
+def generate_signals_mean_reversion(df, rsi_low=30, rsi_high=70, bb_std=2.0,
+                                     trend_filter=True, vol_max=1.5):
+    """
+    MEAN REVERSION: contrarian en extremos estadísticos.
+      LONG  (+1): RSI < rsi_low + precio bajo BB inferior (bb_std sigma)
+                  + si trend_filter=True, precio > EMA200 (solo long en alcista)
+                  + volumen no exagerado (evita capitulaciones reales)
+      SHORT (-1): RSI > rsi_high + precio sobre BB superior
+                  + si trend_filter=True, precio < EMA200 (solo short en bajista)
+                  + volumen no exagerado
+    Captura rebotes a la media. Pensada para timeframes intradía (1h, 15m)
+    donde el ruido genera extremos frecuentes que revierten.
+    """
+    c = df['Close']
+
+    # Recalculamos bandas con el sigma pedido por si difiere del default (2)
+    bb_mid = c.rolling(20).mean()
+    bb_dev = c.rolling(20).std()
+    bb_up  = bb_mid + bb_std * bb_dev
+    bb_lo  = bb_mid - bb_std * bb_dev
+
+    below_bb = c < bb_lo
+    above_bb = c > bb_up
+
+    rsi_ovs  = df['rsi'] < rsi_low
+    rsi_ovb  = df['rsi'] > rsi_high
+
+    vol_ok   = df['vol_ratio'] < vol_max   # descarta barras con volumen anormal
+
+    if trend_filter:
+        long_trend  = c > df['ema200']
+        short_trend = c < df['ema200']
+    else:
+        long_trend = short_trend = pd.Series(True, index=df.index)
+
+    df['signal'] = 0
+    df.loc[below_bb & rsi_ovs & long_trend  & vol_ok, 'signal'] =  1
+    df.loc[above_bb & rsi_ovb & short_trend & vol_ok, 'signal'] = -1
+    return df
+
+
 def generate_signals(df, strategy='breakout', **params):
     if strategy == 'pullback':
         return generate_signals_pullback(df, **params)
@@ -217,6 +258,8 @@ def generate_signals(df, strategy='breakout', **params):
         return generate_signals_weekly_trend(df, **params)
     if strategy == 'swing':
         return generate_signals_swing(df, **params)
+    if strategy == 'mean_reversion':
+        return generate_signals_mean_reversion(df, **params)
     return generate_signals_breakout(df, **params)
 
 
@@ -231,13 +274,33 @@ def backtest(ticker, start='2020-01-01', end=None,
              rr_ratio=2.0,
              strategy='breakout',
              timeframe='1d',
-             signal_params=None):
+             signal_params=None,
+             sim_start=None,
+             trailing_atr=None,
+             dd_pause_threshold=None,
+             vix_df=None,
+             vix_pause_above=None):
+    """
+    Parámetros de la Fase 1:
+      trailing_atr:        distancia del trailing stop en ATRs (ej 2.0).
+                           Si está seteado, reemplaza el TP fijo por trailing.
+      dd_pause_threshold:  drawdown máximo tolerado antes de pausar nuevas aperturas
+                           (ej 0.10 = -10%). Cuando recupera, se reactiva.
+      vix_df:              DataFrame del VIX (fetch aparte). Solo usado si vix_pause_above está seteado.
+      vix_pause_above:     nivel de VIX sobre el cual se pausan aperturas (ej 35).
+
+    Si sim_start está seteado, la data se carga desde `start` (para indicadores)
+    pero los trades solo se ejecutan desde `sim_start` en adelante.
+    """
     if end is None:
         end = datetime.now().strftime('%Y-%m-%d')
 
-    is_weekly  = (timeframe == '1wk')
-    min_bars   = 104 if is_weekly else 250  # 2 años de semanas o ~1 año de días
-    ann_factor = 52  if is_weekly else 252
+    if timeframe == '1wk':
+        min_bars, ann_factor = 104, 52
+    elif timeframe in ('1h', '60m'):
+        min_bars, ann_factor = 500, 1638   # ~6.5h × 252 días hábiles
+    else:
+        min_bars, ann_factor = 250, 252
 
     raw = fetch(ticker, start, end, interval=timeframe)
     if raw.empty or len(raw) < min_bars:
@@ -247,34 +310,64 @@ def backtest(ticker, start='2020-01-01', end=None,
     df = generate_signals(df, strategy=strategy, **(signal_params or {}))
     df = df.dropna()
 
-    capital  = float(initial_capital)
-    position = None
-    trades   = []
-    equity   = []
+    # Si hay sim_start, marcar el índice desde donde arranca el trading real
+    if sim_start is not None:
+        sim_start_ts = pd.Timestamp(sim_start).tz_localize(df.index.tz) \
+            if df.index.tz is not None else pd.Timestamp(sim_start)
+        start_idx = df.index.searchsorted(sim_start_ts)
+    else:
+        start_idx = 1
 
-    for i in range(1, len(df)):
+    capital     = float(initial_capital)
+    equity_peak = capital
+    position    = None
+    trades      = []
+    equity      = []
+
+    # Pre-procesar VIX si fue provisto: reindexar a las fechas del df
+    vix_aligned = None
+    if vix_df is not None and vix_pause_above is not None:
+        vix_aligned = vix_df['Close'].reindex(df.index, method='ffill')
+
+    for i in range(max(1, start_idx), len(df)):
         row  = df.iloc[i]
         prev = df.iloc[i - 1]
         date = df.index[i]
 
         equity.append(capital)
+        equity_peak = max(equity_peak, capital)
 
         # ── Gestionar posición abierta ──────────────────────────────
         if position:
             low  = float(row['Low'])
             high = float(row['High'])
-            sl   = position['stop']
-            tp   = position['target']
             d    = position['dir']
+            atr_val = float(prev['atr']) if not pd.isna(prev['atr']) else 0
+
+            # Trailing stop: actualizar el stop si el precio avanzó a favor
+            if trailing_atr is not None and atr_val > 0:
+                if d == 'LONG':
+                    new_sl = high - trailing_atr * atr_val
+                    if new_sl > position['stop']:
+                        position['stop'] = round(new_sl, 2)
+                else:
+                    new_sl = low + trailing_atr * atr_val
+                    if new_sl < position['stop']:
+                        position['stop'] = round(new_sl, 2)
+
+            sl = position['stop']
+            tp = position['target']
 
             sl_hit = (low <= sl) if d == 'LONG' else (high >= sl)
-            tp_hit = (high >= tp) if d == 'LONG' else (low <= tp)
+            # Si usamos trailing, ignoramos TP fijo (el trailing hace el trabajo)
+            tp_hit = (False if trailing_atr is not None
+                      else ((high >= tp) if d == 'LONG' else (low <= tp)))
 
             if sl_hit:
                 pnl = (sl - position['entry']) * position['size'] * (1 if d == 'LONG' else -1)
                 capital += pnl
                 trades.append({**position, 'exit': sl, 'exit_date': date,
-                               'pnl': pnl, 'result': 'SL'})
+                               'pnl': pnl, 'result': 'TRAIL' if trailing_atr else 'SL'})
                 position = None
 
             elif tp_hit:
@@ -283,6 +376,20 @@ def backtest(ticker, start='2020-01-01', end=None,
                 trades.append({**position, 'exit': tp, 'exit_date': date,
                                'pnl': pnl, 'result': 'TP'})
                 position = None
+
+        # ── Filtros globales antes de abrir ─────────────────────────
+        if position is None:
+            # Pause por drawdown: si caímos más de X% desde el peak, no abrir
+            if dd_pause_threshold is not None and equity_peak > 0:
+                current_dd = (capital - equity_peak) / equity_peak
+                if current_dd < -abs(dd_pause_threshold):
+                    continue
+
+            # Pause por VIX: si VIX > threshold, no abrir
+            if vix_aligned is not None and vix_pause_above is not None:
+                vix_val = vix_aligned.iloc[i] if i < len(vix_aligned) else None
+                if vix_val is not None and not pd.isna(vix_val) and vix_val > vix_pause_above:
+                    continue
 
         # ── Abrir nueva posición (LONG o SHORT) ─────────────────────
         sig = int(prev['signal'])

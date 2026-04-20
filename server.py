@@ -466,6 +466,138 @@ def sync_post():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── Bot monitor ─────────────────────────────────────────────
+BOT_STATE_PATH = os.path.join(os.path.dirname(__file__), 'bot_state.json')
+
+def _read_bot_state():
+    """Lee bot_state.json. Devuelve estructura vacía si no existe o falla."""
+    try:
+        with open(BOT_STATE_PATH, 'r') as f:
+            s = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            'positions': {}, 'history': [], 'last_run': None,
+            'total_trades': 0, 'peak_equity': 0, 'current_equity': None,
+        }
+    s.setdefault('positions',      {})
+    s.setdefault('history',        [])
+    s.setdefault('last_run',       None)
+    s.setdefault('total_trades',   0)
+    s.setdefault('peak_equity',    0)
+    s.setdefault('current_equity', None)
+    return s
+
+
+def _compute_metrics(state):
+    """Calcula métricas agregadas del history del bot."""
+    history = state.get('history', [])
+    closes  = [e for e in history if e.get('event') == 'close' and e.get('pnl') is not None]
+
+    wins   = [e for e in closes if e['pnl'] > 0]
+    losses = [e for e in closes if e['pnl'] < 0]
+
+    total_pnl  = sum(e['pnl'] for e in closes)
+    gross_win  = sum(e['pnl'] for e in wins)
+    gross_loss = abs(sum(e['pnl'] for e in losses))
+    pf         = (gross_win / gross_loss) if gross_loss > 0 else (float('inf') if gross_win > 0 else 0)
+
+    def agg(events):
+        cl = [e for e in events if e.get('event') == 'close' and e.get('pnl') is not None]
+        w  = [e for e in cl if e['pnl'] > 0]
+        l_ = [e for e in cl if e['pnl'] < 0]
+        gw = sum(e['pnl'] for e in w)
+        gl = abs(sum(e['pnl'] for e in l_))
+        return {
+            'trades':        len(cl),
+            'pnl':           round(sum(e['pnl'] for e in cl), 2),
+            'wins':          len(w),
+            'losses':        len(l_),
+            'win_rate':      round(len(w) / len(cl) * 100, 1) if cl else 0,
+            'avg_win':       round(gw / len(w), 2) if w else 0,
+            'avg_loss':      round(gl / len(l_), 2) if l_ else 0,
+            'profit_factor': round(gw / gl, 2) if gl > 0 else (None if not w else 999),
+        }
+
+    by_strategy = {}
+    for strat in {e.get('strategy') for e in closes if e.get('strategy')}:
+        by_strategy[strat] = agg([e for e in history if e.get('strategy') == strat])
+
+    by_ticker = {}
+    for tk in {e.get('ticker') for e in closes if e.get('ticker')}:
+        by_ticker[tk] = agg([e for e in history if e.get('ticker') == tk])
+
+    # Equity curve: cumulative pnl ordenado cronológicamente
+    sorted_closes = sorted(closes, key=lambda e: e.get('ts', ''))
+    cum = 0
+    equity_curve = []
+    for e in sorted_closes:
+        cum += e['pnl']
+        equity_curve.append({'ts': e.get('ts'), 'cum_pnl': round(cum, 2)})
+
+    return {
+        'overall': {
+            'trades':        len(closes),
+            'pnl':           round(total_pnl, 2),
+            'wins':          len(wins),
+            'losses':        len(losses),
+            'win_rate':      round(len(wins) / len(closes) * 100, 1) if closes else 0,
+            'avg_win':       round(gross_win / len(wins), 2) if wins else 0,
+            'avg_loss':      round(gross_loss / len(losses), 2) if losses else 0,
+            'profit_factor': round(pf, 2) if pf != float('inf') else None,
+        },
+        'by_strategy':  by_strategy,
+        'by_ticker':    by_ticker,
+        'equity_curve': equity_curve,
+    }
+
+
+@app.route("/bot/state")
+@require_auth
+def bot_state():
+    """Estado crudo del bot: posiciones abiertas, history, equity, último run."""
+    s = _read_bot_state()
+    # Drawdown actual desde peak
+    peak = s.get('peak_equity') or 0
+    cur  = s.get('current_equity')
+    dd   = round((cur - peak) / peak * 100, 2) if (peak and cur) else None
+    return jsonify({
+        'positions':       s.get('positions', {}),
+        'history':         s.get('history', [])[-200:],   # últimos 200 eventos
+        'last_run':        s.get('last_run'),
+        'total_trades':    s.get('total_trades', 0),
+        'peak_equity':     peak,
+        'current_equity':  cur,
+        'drawdown_pct':    dd,
+        'positions_count': len(s.get('positions', {})),
+    })
+
+
+@app.route("/bot/metrics")
+@require_auth
+def bot_metrics():
+    """Agregados: P&L total, win rate, por estrategia, por ticker, equity curve."""
+    s = _read_bot_state()
+    return jsonify(_compute_metrics(s))
+
+
+# Canasta de tickers que opera el bot. Mantener en sync con TICKERS en bot.py.
+BOT_TICKERS = [
+    'NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT', 'AMZN',
+    'GOOGL', 'TSLA', 'AVGO',
+    'JPM', 'V', 'UNH', 'KO',
+    'NU', 'MELI', 'BABA',
+    'SPY', 'QQQ', 'IWM',
+    'GLD', 'SLV', 'XLE',
+    'VIST',
+]
+
+@app.route("/bot/tickers")
+@require_auth
+def bot_tickers():
+    """Canasta de tickers que opera el bot (24). Usada para popular el seguimiento."""
+    return jsonify({'tickers': BOT_TICKERS})
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "server": "CEDEAR Terminal", "time": datetime.now().isoformat()})
