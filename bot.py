@@ -485,11 +485,14 @@ def sync_positions_with_ibkr(ib, state):
 
         exit_price = get_market_price(ib, ticker)
         pnl = None
+        pnl_pct = None
         if exit_price and pos.get('entry'):
             mult = 1 if pos['dir'] == 'LONG' else -1
             pnl = (exit_price - pos['entry']) * pos['size'] * mult
+            pnl_pct = (exit_price - pos['entry']) / pos['entry'] * 100 * mult
 
-        pnl_str = f"${pnl:+,.2f}" if pnl is not None else "?"
+        pnl_str = (f"${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+                   if pnl is not None and pnl_pct is not None else "?")
         log.info(f"Huérfana detectada: {ticker} [{strat}] {pos['dir']} "
                  f"cerrada fuera del bot (trailing stop). P&L≈{pnl_str}")
 
@@ -538,19 +541,22 @@ def close_position(ib, key, state):
     # P&L estimado usando el último precio disponible
     exit_price = get_market_price(ib, ticker) or pos.get('entry')
     pnl = None
+    pnl_pct = None
     if exit_price and pos.get('entry'):
         mult = 1 if pos['dir'] == 'LONG' else -1
         pnl = (exit_price - pos['entry']) * pos['size'] * mult
+        pnl_pct = (exit_price - pos['entry']) / pos['entry'] * 100 * mult
 
     log.info(f"Posición cerrada: {close_action} {pos['size']} {ticker} "
-             f"({strat})  P&L≈${pnl:.2f}" if pnl is not None
+             f"({strat})  P&L≈${pnl:.2f} ({pnl_pct:+.2f}%)" if pnl is not None
              else f"Posición cerrada: {close_action} {pos['size']} {ticker} ({strat})")
 
     log_trade(state, 'close', ticker, strat, pos['dir'],
               price=exit_price, size=pos['size'], entry=pos.get('entry'), pnl=pnl,
               indicators=pos.get('indicators'))
 
-    pnl_str = f"${pnl:+,.2f}" if pnl is not None else "?"
+    pnl_str = (f"${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+               if pnl is not None and pnl_pct is not None else "?")
     notifier.notify(
         f"🔴 <b>Cierre</b>  {ticker} [{strat}] {pos['dir']}\n"
         f"Exit ≈ ${exit_price:.2f}  |  Entry ${pos.get('entry',0):.2f}\n"
