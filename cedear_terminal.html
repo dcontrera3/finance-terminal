@@ -145,8 +145,87 @@ body{background:var(--bg0);color:var(--text);font-family:var(--font-sans);
 .ar-fill{height:4px;border-radius:3px;transition:width .5s;}
 .ar-pct{font-size:.62rem;color:var(--muted);width:38px;text-align:right;font-family:var(--font-mono);font-weight:500;}
 
+/* ── DASHBOARD (vista principal por default) ── */
+.dash-view{flex:1;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;padding:18px 22px 24px;gap:18px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+.dash-header{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+.dash-title{font-family:var(--font-display);font-size:1.4rem;font-weight:700;letter-spacing:-.3px;
+  background:linear-gradient(135deg,#fff 0%,#a78bfa 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.dash-sub{font-size:.66rem;color:var(--muted);font-family:var(--font-mono);margin-top:2px;}
+.view-toggle{display:flex;gap:4px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-md);padding:3px;}
+.view-toggle button{background:transparent;border:none;padding:7px 14px;color:var(--muted);font-family:var(--font-sans);
+  font-size:.7rem;font-weight:600;letter-spacing:.3px;cursor:pointer;border-radius:var(--radius-sm);transition:all .15s;}
+.view-toggle button.active{background:var(--accent-soft);color:var(--accent-2);box-shadow:inset 0 0 0 1px rgba(139,92,246,.3);}
+.view-toggle button:hover:not(.active){color:var(--text);}
+
+.dash-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+@media(max-width:1200px){.dash-kpis{grid-template-columns:repeat(3,1fr);}}
+@media(max-width:700px){.dash-kpis{grid-template-columns:repeat(2,1fr);}}
+.dash-kpi{padding:14px 16px;background:var(--gradient-card);border:1px solid var(--border);border-radius:var(--radius-md);
+  display:flex;flex-direction:column;gap:4px;min-width:0;}
+.dash-kpi-l{font-size:.58rem;letter-spacing:.5px;color:var(--muted);font-weight:600;text-transform:uppercase;}
+.dash-kpi-v{font-family:var(--font-display);font-size:1.35rem;font-weight:700;letter-spacing:-.3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.dash-kpi-s{font-size:.62rem;color:var(--muted);font-family:var(--font-mono);font-weight:500;margin-top:2px;}
+
+.dash-dd-warn{padding:11px 14px;border-radius:var(--radius-md);background:linear-gradient(135deg,rgba(239,68,68,.12) 0%,rgba(239,68,68,.04) 100%);
+  border:1px solid rgba(239,68,68,.35);color:var(--red);font-size:.74rem;font-weight:600;display:none;}
+.dash-dd-warn.show{display:block;}
+
+.dash-pos-section{display:flex;flex-direction:column;gap:10px;}
+.dash-pos-title{font-size:.66rem;letter-spacing:.5px;color:var(--muted);font-weight:600;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px;}
+.dash-pos-title span.count{padding:2px 8px;background:var(--accent-soft);color:var(--accent-2);border-radius:6px;
+  font-family:var(--font-mono);font-size:.6rem;}
+.dash-pos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px;}
+.dash-pos-empty{padding:42px 22px;text-align:center;color:var(--muted);font-family:var(--font-mono);
+  font-size:.7rem;letter-spacing:.4px;line-height:1.8;background:var(--bg2);border:1px dashed var(--border2);border-radius:var(--radius-md);}
+
+.dpc{padding:16px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-md);
+  display:flex;flex-direction:column;gap:10px;transition:all .15s;position:relative;overflow:hidden;}
+.dpc:hover{border-color:rgba(139,92,246,.35);box-shadow:0 6px 20px rgba(0,0,0,.25);transform:translateY(-2px);}
+.dpc.active{border-color:rgba(139,92,246,.5);}
+.dpc-accent{position:absolute;left:0;top:0;bottom:0;width:3px;}
+.dpc-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.dpc-sym{font-family:var(--font-display);font-size:1.15rem;font-weight:700;letter-spacing:-.2px;}
+.dpc-days{margin-left:auto;font-size:.58rem;color:var(--muted);font-family:var(--font-mono);}
+.dpc-price-row{display:flex;align-items:baseline;gap:10px;}
+.dpc-price{font-family:var(--font-mono);font-size:1.1rem;font-weight:600;}
+.dpc-chg{font-size:.68rem;font-family:var(--font-mono);font-weight:500;padding:2px 7px;border-radius:5px;}
+.dpc-pnl-row{padding:10px 12px;border-radius:var(--radius-sm);background:var(--bg1);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.dpc-pnl-l{font-size:.56rem;letter-spacing:.4px;color:var(--muted);font-weight:600;text-transform:uppercase;}
+.dpc-pnl-v{font-family:var(--font-mono);font-weight:700;font-size:.95rem;text-align:right;}
+.dpc-pnl-pct{font-size:.66rem;font-family:var(--font-mono);font-weight:600;}
+.dpc-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 10px;
+  font-family:var(--font-mono);font-size:.58rem;color:var(--muted);}
+.dpc-grid div{display:flex;flex-direction:column;gap:2px;}
+.dpc-grid strong{color:var(--text);font-weight:600;font-size:.68rem;}
+.dpc-spark{height:24px;opacity:.75;}
+.dpc-actions{display:flex;gap:6px;margin-top:2px;}
+.dpc-btn{flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:transparent;
+  color:var(--muted);font-size:.62rem;font-weight:600;letter-spacing:.3px;cursor:pointer;font-family:var(--font-sans);
+  transition:all .15s;}
+.dpc-btn:hover{border-color:var(--accent);color:var(--accent-2);background:var(--accent-soft);}
+.dpc-btn.primary{background:var(--gradient-primary);border-color:transparent;color:#fff;}
+.dpc-btn.primary:hover{box-shadow:0 4px 14px rgba(139,92,246,.4);}
+
+.dash-alloc{padding:16px 18px;background:var(--gradient-card);border:1px solid var(--border);border-radius:var(--radius-md);}
+.dash-alloc-title{font-size:.66rem;letter-spacing:.5px;color:var(--muted);margin-bottom:12px;font-weight:600;text-transform:uppercase;}
+.dash-alloc .ar{margin-bottom:8px;}
+.dash-alloc .ar-sym{width:70px;font-size:.7rem;}
+.dash-alloc .ar-pct{width:56px;font-size:.66rem;}
+.dash-alloc .ar-track,.dash-alloc .ar-fill{height:6px;border-radius:4px;}
+.ar-cash .ar-sym{color:var(--yellow);}
+.ar-cash .ar-fill{background:var(--yellow) !important;}
+
 /* ── CHART AREA ── */
 .chart-area{flex:1;display:flex;flex-direction:column;overflow:hidden;background:transparent;}
+.chart-view{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.chart-view.hidden,.dash-view.hidden{display:none;}
+.back-btn{padding:6px 12px;border-radius:var(--radius-sm);cursor:pointer;font-size:.68rem;font-weight:600;
+  font-family:var(--font-sans);border:1px solid var(--border2);background:var(--bg2);color:var(--muted);
+  transition:all .15s;letter-spacing:.3px;}
+.back-btn:hover{border-color:var(--accent);color:var(--accent-2);background:var(--accent-soft);}
 .ch-header{padding:16px 22px;background:transparent;border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:16px;flex-shrink:0;flex-wrap:wrap;}
 .ch-sym{font-family:var(--font-display);font-size:1.8rem;font-weight:700;letter-spacing:-.5px;
@@ -909,38 +988,8 @@ canvas{display:block;}
           <span class="bot-meta-val" id="botRunTime">—</span>
         </div>
       </div>
-      <!-- DD warning -->
-      <div class="bot-dd-warn" id="botDdWarn" style="display:none"></div>
-      <!-- KPIs compactos -->
-      <div class="bot-kpi-grid">
-        <div class="bot-kpi">
-          <div class="bot-kpi-l">EQUITY IBKR</div>
-          <div class="bot-kpi-v" id="kpiEquity">—</div>
-          <div class="bot-kpi-s" id="kpiDd">DD —</div>
-        </div>
-        <div class="bot-kpi">
-          <div class="bot-kpi-l">P&amp;L CERRADO</div>
-          <div class="bot-kpi-v" id="kpiPnl">—</div>
-          <div class="bot-kpi-s" id="kpiTrades">0 trades</div>
-        </div>
-        <div class="bot-kpi">
-          <div class="bot-kpi-l">WIN RATE</div>
-          <div class="bot-kpi-v" id="kpiWr">—</div>
-          <div class="bot-kpi-s" id="kpiWl">0W / 0L</div>
-        </div>
-        <div class="bot-kpi">
-          <div class="bot-kpi-l">ABIERTAS</div>
-          <div class="bot-kpi-v" id="kpiOpen" style="color:var(--accent)">0</div>
-          <div class="bot-kpi-s" id="kpiPeak">Peak —</div>
-        </div>
-      </div>
-      <!-- Lista de posiciones abiertas del bot -->
+      <!-- Lista compacta de posiciones: navegador entre tickers -->
       <div class="port-list" id="portList"></div>
-      <!-- Alocación bars -->
-      <div class="sb-alloc">
-        <div class="sb-alloc-title">ALOCACIÓN ACTIVA</div>
-        <div id="allocBars"></div>
-      </div>
     </div>
 
     <!-- Panel: Seguimiento -->
@@ -956,48 +1005,110 @@ canvas{display:block;}
     </div>
   </div>
 
-  <!-- CHART AREA -->
+  <!-- CHART AREA (contiene vista DASHBOARD y vista GRÁFICO) -->
   <div class="chart-area">
-    <div class="ch-header">
-      <div class="ch-sym" id="chSym" style="color:var(--accent)">--</div>
-      <button class="news-btn" id="chNewsBtn" onclick="openNews(currentTicker)">📰 NEWS</button>
-      <div class="ch-px" id="chPx">--</div>
-      <div class="ch-chg up" id="chChg">--%</div>
-      <button class="ai-btn" id="aiBtn" onclick="openAdvice()">✦ CONSEJO IA</button>
-      <button class="ai-btn" id="exportPromptBtn" onclick="exportPrompt()" style="background:transparent;border-color:var(--accent);color:var(--accent);opacity:.85" title="Copiar prompt completo para Claude / Gemini">⎘ PROMPT</button>
-      <div class="ch-stats">
-        <div><div class="chs-l">OPEN</div><div class="chs-v" id="stO">--</div></div>
-        <div><div class="chs-l">HIGH</div><div class="chs-v" id="stH" style="color:var(--green)">--</div></div>
-        <div><div class="chs-l">LOW</div><div class="chs-v" id="stL" style="color:var(--red)">--</div></div>
-        <div><div class="chs-l">VOL</div><div class="chs-v" id="stV">--</div></div>
-        <div><div class="chs-l">ATR14</div><div class="chs-v" id="stA">--</div></div>
-      </div>
-    </div>
-    <div class="leg">
-      <div class="li"><div class="ll" style="background:var(--ema20)"></div>EMA 20</div>
-      <div class="li"><div class="ll" style="background:var(--ema50)"></div>EMA 50</div>
-      <div class="li"><div class="ll" style="background:var(--ema200)"></div>EMA 200</div>
-      <div class="li"><div class="ll" style="background:rgba(139,92,246,0.5);border-top:1px dashed var(--accent)"></div>Bollinger</div>
-      <div class="li"><div style="width:9px;height:9px;background:rgba(34,197,94,0.55);border-radius:2px"></div>Vela ↑</div>
-      <div class="li"><div style="width:9px;height:9px;background:rgba(239,68,68,0.55);border-radius:2px"></div>Vela ↓</div>
-      <div class="li" style="margin-left:auto;color:var(--muted);font-size:.5rem">scroll=zoom · drag=pan · doble click=reset</div>
-    </div>
-    <div class="charts-wrap">
-      <div class="mcb">
-        <div class="loader" id="mainLoader">
-          <div class="spin"></div>
-          <div class="load-txt" id="loaderTxt">CONECTANDO AL SERVIDOR...</div>
-          <div class="load-prog"><div class="load-bar" id="loadBar"></div></div>
+
+    <!-- Vista DASHBOARD (default) -->
+    <div class="dash-view" id="dashView">
+      <div class="dash-header">
+        <div>
+          <div class="dash-title">DASHBOARD</div>
+          <div class="dash-sub" id="dashSub">Estado del bot en vivo</div>
         </div>
-        <canvas id="mainChart"></canvas>
+        <div class="view-toggle">
+          <button id="toggleDash" class="active" onclick="switchView('dashboard')">📊 DASHBOARD</button>
+          <button id="toggleChart" onclick="switchView('chart')">📈 GRÁFICO</button>
+        </div>
       </div>
-      <div class="rcb">
-        <div class="chart-lbl" id="rsiLbl">RSI(14)</div>
-        <canvas id="rsiChart"></canvas>
+
+      <div class="dash-dd-warn" id="dashDdWarn"></div>
+
+      <div class="dash-kpis">
+        <div class="dash-kpi">
+          <div class="dash-kpi-l">Equity IBKR</div>
+          <div class="dash-kpi-v" id="kpiEquity">—</div>
+          <div class="dash-kpi-s" id="kpiDd">DD —</div>
+        </div>
+        <div class="dash-kpi">
+          <div class="dash-kpi-l">P&amp;L Cerrado</div>
+          <div class="dash-kpi-v" id="kpiPnl">—</div>
+          <div class="dash-kpi-s" id="kpiTrades">0 trades</div>
+        </div>
+        <div class="dash-kpi">
+          <div class="dash-kpi-l">Win Rate</div>
+          <div class="dash-kpi-v" id="kpiWr">—</div>
+          <div class="dash-kpi-s" id="kpiWl">0W / 0L</div>
+        </div>
+        <div class="dash-kpi">
+          <div class="dash-kpi-l">Abiertas</div>
+          <div class="dash-kpi-v" id="kpiOpen" style="color:var(--accent)">0</div>
+          <div class="dash-kpi-s" id="kpiPeak">Peak —</div>
+        </div>
+        <div class="dash-kpi">
+          <div class="dash-kpi-l">Liquidez</div>
+          <div class="dash-kpi-v" id="kpiCash" style="color:var(--yellow)">—</div>
+          <div class="dash-kpi-s" id="kpiCashPct">— del equity</div>
+        </div>
       </div>
-      <div class="mab">
-        <div class="chart-lbl" id="macdLbl">MACD(12,26,9)</div>
-        <canvas id="macdChart"></canvas>
+
+      <div class="dash-pos-section">
+        <div class="dash-pos-title">
+          Posiciones abiertas
+          <span class="count" id="dashPosCount">0</span>
+        </div>
+        <div class="dash-pos-grid" id="dashPosGrid"></div>
+      </div>
+
+      <div class="dash-alloc">
+        <div class="dash-alloc-title">Alocación activa</div>
+        <div id="allocBars"></div>
+      </div>
+    </div>
+
+    <!-- Vista GRÁFICO (oculta por default, se muestra al clickear una posición o el toggle) -->
+    <div class="chart-view hidden" id="chartView">
+      <div class="ch-header">
+        <button class="back-btn" onclick="switchView('dashboard')">← DASHBOARD</button>
+        <div class="ch-sym" id="chSym" style="color:var(--accent)">--</div>
+        <button class="news-btn" id="chNewsBtn" onclick="openNews(currentTicker)">📰 NEWS</button>
+        <div class="ch-px" id="chPx">--</div>
+        <div class="ch-chg up" id="chChg">--%</div>
+        <button class="ai-btn" id="aiBtn" onclick="openAdvice()">✦ CONSEJO IA</button>
+        <button class="ai-btn" id="exportPromptBtn" onclick="exportPrompt()" style="background:transparent;border-color:var(--accent);color:var(--accent);opacity:.85" title="Copiar prompt completo para Claude / Gemini">⎘ PROMPT</button>
+        <div class="ch-stats">
+          <div><div class="chs-l">OPEN</div><div class="chs-v" id="stO">--</div></div>
+          <div><div class="chs-l">HIGH</div><div class="chs-v" id="stH" style="color:var(--green)">--</div></div>
+          <div><div class="chs-l">LOW</div><div class="chs-v" id="stL" style="color:var(--red)">--</div></div>
+          <div><div class="chs-l">VOL</div><div class="chs-v" id="stV">--</div></div>
+          <div><div class="chs-l">ATR14</div><div class="chs-v" id="stA">--</div></div>
+        </div>
+      </div>
+      <div class="leg">
+        <div class="li"><div class="ll" style="background:var(--ema20)"></div>EMA 20</div>
+        <div class="li"><div class="ll" style="background:var(--ema50)"></div>EMA 50</div>
+        <div class="li"><div class="ll" style="background:var(--ema200)"></div>EMA 200</div>
+        <div class="li"><div class="ll" style="background:rgba(139,92,246,0.5);border-top:1px dashed var(--accent)"></div>Bollinger</div>
+        <div class="li"><div style="width:9px;height:9px;background:rgba(34,197,94,0.55);border-radius:2px"></div>Vela ↑</div>
+        <div class="li"><div style="width:9px;height:9px;background:rgba(239,68,68,0.55);border-radius:2px"></div>Vela ↓</div>
+        <div class="li" style="margin-left:auto;color:var(--muted);font-size:.5rem">scroll=zoom · drag=pan · doble click=reset</div>
+      </div>
+      <div class="charts-wrap">
+        <div class="mcb">
+          <div class="loader" id="mainLoader">
+            <div class="spin"></div>
+            <div class="load-txt" id="loaderTxt">CONECTANDO AL SERVIDOR...</div>
+            <div class="load-prog"><div class="load-bar" id="loadBar"></div></div>
+          </div>
+          <canvas id="mainChart"></canvas>
+        </div>
+        <div class="rcb">
+          <div class="chart-lbl" id="rsiLbl">RSI(14)</div>
+          <canvas id="rsiChart"></canvas>
+        </div>
+        <div class="mab">
+          <div class="chart-lbl" id="macdLbl">MACD(12,26,9)</div>
+          <canvas id="macdChart"></canvas>
+        </div>
       </div>
     </div>
   </div>
@@ -1409,11 +1520,49 @@ async function checkServer() {
 // ══════════════════════════════════════════
 // SIDEBAR — lista de posiciones abiertas del bot
 // ══════════════════════════════════════════
+// Estado de la vista principal: 'dashboard' (default) o 'chart'.
+let viewMode = 'dashboard';
+
+function switchView(mode) {
+  viewMode = mode;
+  const dash = document.getElementById('dashView');
+  const chart = document.getElementById('chartView');
+  const rpanel = document.getElementById('rPanel');
+  const tDash = document.getElementById('toggleDash');
+  const tChart = document.getElementById('toggleChart');
+  if (mode === 'chart') {
+    dash.classList.add('hidden');
+    chart.classList.remove('hidden');
+    if (rpanel) rpanel.style.display = '';
+    if (tDash) tDash.classList.remove('active');
+    if (tChart) tChart.classList.add('active');
+    // El chart-area ya está en el DOM pero los canvases fueron inicializados
+    // con el wrapper hidden → forzar un resize + re-carga para que Chart.js
+    // recalcule dimensiones contra el nuevo viewport visible.
+    resizeCanvases();
+    loadChart();
+  } else {
+    chart.classList.add('hidden');
+    dash.classList.remove('hidden');
+    if (rpanel) rpanel.style.display = 'none';
+    if (tDash) tDash.classList.add('active');
+    if (tChart) tChart.classList.remove('active');
+    // En dashboard no hay ticker "activo" visible — limpiar highlight del sidebar
+    document.querySelectorAll('.pi.active').forEach(el => el.classList.remove('active'));
+  }
+}
+
+function openChartForTicker(ticker) {
+  currentTicker = ticker;
+  switchView('chart');
+  updateActive();
+}
+
+// Sidebar compacto: navegador de posiciones. Click = abrir gráfico de ese ticker.
 function renderSidebar() {
   const list = document.getElementById('portList');
-  const bars = document.getElementById('allocBars');
-  if (!list || !bars) return;
-  list.innerHTML = ''; bars.innerHTML = '';
+  if (!list) return;
+  list.innerHTML = '';
 
   if (!PORTFOLIO.length) {
     list.innerHTML = `
@@ -1422,38 +1571,25 @@ function renderSidebar() {
         EL BOT NO TIENE POSICIONES ABIERTAS.<br>
         <span style="font-size:.55rem;opacity:.7">Aparecerán acá cuando ejecute trades.</span>
       </div>`;
-    bars.innerHTML = `<div style="font-size:.55rem;color:var(--muted);padding:4px 0">—</div>`;
     return;
   }
 
-  // Valores de mercado para computar % de alocación
-  const vals = PORTFOLIO.map(p => (priceCache[p.ticker]?.price ?? p.entry) * p.qty);
-  const totalVal = vals.reduce((s, v) => s + v, 0);
-  const pcts = vals.map(v => totalVal > 0 ? v / totalVal * 100 : 0);
-
-  PORTFOLIO.forEach((item, idx) => {
+  PORTFOLIO.forEach(item => {
     const c      = priceCache[item.ticker];
     const px     = c ? fmt(c.price) : '···';
     const chg    = c?.chg ?? null;
     const chgC   = chg == null ? 'var(--muted)' : chg >= 0 ? 'var(--green)' : 'var(--red)';
     const chgS   = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
-    const pct    = pcts[idx];
     const cur    = c?.price;
     const mult   = item.dir === 'LONG' ? 1 : -1;
     const pnl    = cur ? (cur - item.entry) * item.qty * mult : null;
-    const pnlPct = cur ? (cur - item.entry) / item.entry * 100 * mult : null;
     const pnlC   = pnl == null ? 'var(--muted)' : pnl >= 0 ? 'var(--green)' : 'var(--red)';
-    const pnlStr = pnl != null
-      ? `${pnl >= 0 ? '+' : ''}$${Math.abs(pnl).toFixed(2)} (${pnl >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`
-      : '···';
-    const daysOpen = item.entry_date
-      ? Math.floor((Date.now() - new Date(item.entry_date).getTime()) / 86400000)
-      : 0;
+    const pnlStr = pnl != null ? `${pnl >= 0 ? '+' : ''}$${Math.abs(pnl).toFixed(0)}` : '···';
     const dirCls = (item.dir || 'LONG').toLowerCase();
     const accent = item.dir === 'SHORT' ? 'var(--red)' : 'var(--green)';
 
     const el = document.createElement('div');
-    el.className = 'pi' + (item.ticker === currentTicker ? ' active' : '');
+    el.className = 'pi' + (item.ticker === currentTicker && viewMode === 'chart' ? ' active' : '');
     el.id = 'pi-' + item.ticker;
     el.style.borderLeft = `3px solid ${accent}`;
     el.innerHTML = `
@@ -1462,29 +1598,19 @@ function renderSidebar() {
         <span class="strat-badge ${item.strategy}" style="margin-left:2px">${item.strategy || ''}</span>
         <span class="dir-badge ${dirCls}" style="margin-left:2px">${item.dir || ''}</span>
         <button class="pi-news-btn" title="Ver noticias" data-ticker="${item.ticker}" style="margin-left:auto">NEWS</button>
-        <span class="pi-px">${px}</span>
       </div>
-      <div class="pi-r2" style="margin-top:3px">
-        <span class="pi-nm">${daysOpen}d abierta</span>
+      <div class="pi-r2" style="margin-top:4px;align-items:baseline">
+        <span class="pi-px">${px}</span>
         <span class="pi-ch" style="color:${chgC}">${chgS}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-        <span style="font-size:.48rem;color:var(--muted);font-family:var(--font-mono)">P&amp;L</span>
-        <span style="font-size:.7rem;font-family:var(--font-mono);font-weight:700;color:${pnlC}">${pnlStr}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px 8px;margin-top:4px;
-        font-family:var(--font-mono);font-size:.52rem;color:var(--muted)">
-        <div>Entry <span style="color:var(--text)">$${item.entry.toFixed(2)}</span></div>
-        <div>Stop <span style="color:var(--text)">$${(item.stop||0).toFixed(2)}</span></div>
-        <div>Size <span style="color:var(--text)">${item.qty}</span></div>
-      </div>
-      ${c?.spark?.length > 1 ? `<div style="margin:4px 0 2px;height:20px">${renderSparkline(c.spark)}</div>` : ''}
-      <div class="pi-bar"><div class="pi-bar-fill" style="width:${Math.min(pct, 100)}%;background:${item.color}"></div></div>
-      <div class="pi-pct">${pct.toFixed(1)}% del capital activo</div>`;
+      <div style="display:flex;justify-content:space-between;margin-top:3px;font-family:var(--font-mono);font-size:.58rem">
+        <span style="color:var(--muted)">P&amp;L</span>
+        <span style="color:${pnlC};font-weight:700">${pnlStr}</span>
+      </div>`;
 
     el.addEventListener('click', e => {
       if (e.target.classList.contains('pi-news-btn')) return;
-      currentTicker = item.ticker; loadChart(); updateActive();
+      openChartForTicker(item.ticker);
     });
     el.querySelector('.pi-news-btn').addEventListener('click', e => {
       e.stopPropagation();
@@ -1492,14 +1618,120 @@ function renderSidebar() {
     });
 
     list.appendChild(el);
+  });
+}
+
+// Dashboard: tarjetas grandes con P&L live + alocación + KPIs.
+// Los KPIs (kpiEquity, kpiPnl, etc.) los escribe renderBotKpis — no se tocan acá.
+function renderDashboard() {
+  const grid  = document.getElementById('dashPosGrid');
+  const bars  = document.getElementById('allocBars');
+  const count = document.getElementById('dashPosCount');
+  if (!grid || !bars) return;
+
+  grid.innerHTML = ''; bars.innerHTML = '';
+  if (count) count.textContent = PORTFOLIO.length;
+
+  // Cálculos de alocación en base al equity real (incluye liquidez).
+  // Si el bot todavía no reportó equity, fallback al market value total.
+  const mktVals   = PORTFOLIO.map(p => (priceCache[p.ticker]?.price ?? p.entry) * p.qty);
+  const mktTotal  = mktVals.reduce((s, v) => s + v, 0);
+  const equity    = portfolioTotal > 0 ? portfolioTotal : mktTotal;
+  const cashUSD   = Math.max(0, equity - mktTotal);
+  const cashPct   = equity > 0 ? cashUSD / equity * 100 : 0;
+  const pcts      = mktVals.map(v => equity > 0 ? v / equity * 100 : 0);
+
+  // KPI Liquidez (el resto lo llena renderBotKpis)
+  const kpiCash    = document.getElementById('kpiCash');
+  const kpiCashPct = document.getElementById('kpiCashPct');
+  if (kpiCash)    kpiCash.textContent    = '$' + fmtN(cashUSD);
+  if (kpiCashPct) kpiCashPct.textContent = equity > 0 ? cashPct.toFixed(1) + '% del equity' : '— del equity';
+
+  if (!PORTFOLIO.length) {
+    grid.innerHTML = `<div class="dash-pos-empty">
+      EL BOT NO TIENE POSICIONES ABIERTAS.<br>
+      <span style="font-size:.6rem;opacity:.75">Aparecerán acá cuando ejecute trades.</span>
+    </div>`;
+    bars.innerHTML = `<div class="ar ar-cash">
+      <div class="ar-sym">CASH</div>
+      <div class="ar-track"><div class="ar-fill" style="width:100%"></div></div>
+      <div class="ar-pct">100%</div>
+    </div>`;
+    return;
+  }
+
+  PORTFOLIO.forEach((item, idx) => {
+    const c       = priceCache[item.ticker];
+    const px      = c ? fmt(c.price) : '···';
+    const chg     = c?.chg ?? null;
+    const chgC    = chg == null ? 'var(--muted)' : chg >= 0 ? 'var(--green)' : 'var(--red)';
+    const chgBg   = chg == null ? 'var(--bg1)' : chg >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+    const chgS    = chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '';
+    const cur     = c?.price;
+    const mult    = item.dir === 'LONG' ? 1 : -1;
+    const pnl     = cur ? (cur - item.entry) * item.qty * mult : null;
+    const pnlPct  = cur ? (cur - item.entry) / item.entry * 100 * mult : null;
+    const pnlC    = pnl == null ? 'var(--muted)' : pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const pnlUsd  = pnl != null ? `${pnl >= 0 ? '+' : ''}$${Math.abs(pnl).toFixed(2)}` : '···';
+    const pnlPctS = pnlPct != null ? `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)` : '';
+    const daysOpen = item.entry_date
+      ? Math.floor((Date.now() - new Date(item.entry_date).getTime()) / 86400000)
+      : 0;
+    const dirCls = (item.dir || 'LONG').toLowerCase();
+    const accent = item.dir === 'SHORT' ? 'var(--red)' : 'var(--green)';
+    const pct    = pcts[idx];
+
+    const card = document.createElement('div');
+    card.className = 'dpc';
+    card.innerHTML = `
+      <div class="dpc-accent" style="background:${accent}"></div>
+      <div class="dpc-head">
+        <span class="dpc-sym" style="color:${item.color}">${escHtml(item.ticker)}</span>
+        <span class="strat-badge ${escHtml(item.strategy || '')}">${escHtml(item.strategy || '')}</span>
+        <span class="dir-badge ${dirCls}">${escHtml(item.dir || '')}</span>
+        <span class="dpc-days">${daysOpen}d abierta</span>
+      </div>
+      <div class="dpc-price-row">
+        <span class="dpc-price">$${px}</span>
+        <span class="dpc-chg" style="color:${chgC};background:${chgBg}">${chgS}</span>
+      </div>
+      <div class="dpc-pnl-row">
+        <span class="dpc-pnl-l">P&amp;L no realizado</span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+          <span class="dpc-pnl-v" style="color:${pnlC}">${pnlUsd}</span>
+          <span class="dpc-pnl-pct" style="color:${pnlC}">${pnlPctS}</span>
+        </div>
+      </div>
+      <div class="dpc-grid">
+        <div><div>Entry</div><strong>$${item.entry.toFixed(2)}</strong></div>
+        <div><div>Stop</div><strong>$${(item.stop || 0).toFixed(2)}</strong></div>
+        <div><div>Size</div><strong>${item.qty}</strong></div>
+      </div>
+      ${c?.spark?.length > 1 ? `<div class="dpc-spark">${renderSparkline(c.spark)}</div>` : ''}
+      <div class="dpc-actions">
+        <button class="dpc-btn primary" data-action="chart" data-ticker="${escHtml(item.ticker)}">📈 Gráfico</button>
+        <button class="dpc-btn" data-action="news" data-ticker="${escHtml(item.ticker)}">📰 News</button>
+      </div>`;
+
+    card.querySelector('[data-action="chart"]').addEventListener('click', () => openChartForTicker(item.ticker));
+    card.querySelector('[data-action="news"]').addEventListener('click', () => openNews(item.ticker));
+    grid.appendChild(card);
 
     const br = document.createElement('div');
     br.className = 'ar';
-    br.innerHTML = `<div class="ar-sym" style="color:${item.color}">${item.ticker}</div>
+    br.innerHTML = `<div class="ar-sym" style="color:${item.color}">${escHtml(item.ticker)}</div>
       <div class="ar-track"><div class="ar-fill" style="width:${Math.min(pct, 100)}%;background:${item.color}"></div></div>
       <div class="ar-pct">${pct.toFixed(1)}%</div>`;
     bars.appendChild(br);
   });
+
+  // Barra de liquidez al final
+  const cashBar = document.createElement('div');
+  cashBar.className = 'ar ar-cash';
+  cashBar.innerHTML = `<div class="ar-sym">CASH</div>
+    <div class="ar-track"><div class="ar-fill" style="width:${Math.min(cashPct, 100)}%"></div></div>
+    <div class="ar-pct">${cashPct.toFixed(1)}%</div>`;
+  bars.appendChild(cashBar);
 }
 
 function renderTabs() {
@@ -2073,7 +2305,7 @@ async function loadAllPrices() {
   });
   savePriceCache();
   checkAlerts();
-  renderSidebar(); renderTabs(); updateActive(); renderWatchlist();
+  renderSidebar(); renderDashboard(); renderTabs(); updateActive(); renderWatchlist();
 }
 
 // Refresco de precios 24h cada 15s
@@ -2088,7 +2320,7 @@ async function manualRefresh() {
   btn.disabled = true;
   dataCache = {};  // fuerza re-fetch del gráfico
   await loadAllPrices();
-  await loadChart();
+  if (viewMode === 'chart') await loadChart();
   setTimeout(() => {
     btn.style.color = '';
     btn.style.borderColor = '';
@@ -2099,15 +2331,20 @@ async function manualRefresh() {
 
 // Inicializa la app (se llama desde auth, una vez que hay sesión válida)
 function initApp() {
+  // Arranca en vista DASHBOARD — rpanel oculto, gráfico no se carga hasta
+  // que el usuario clickee una posición o el toggle "Gráfico".
+  const rpanel = document.getElementById('rPanel');
+  if (rpanel) rpanel.style.display = 'none';
+
   Promise.all([loadFromServer(), loadBotTickers()]).finally(async () => {
     // Default currentTicker desde la canasta si no hay ninguno
     if (!currentTicker && botTickersList[0]) currentTicker = botTickersList[0];
     renderSidebar();
+    renderDashboard();
     renderTabs();
     renderWatchlist();
     await loadBotSnapshot(true);    // primera carga del bot (posiciones + métricas)
     loadAllPrices();
-    loadChart();
     startBotPolling();              // refresca bot state cada 30s
   });
 }
@@ -2700,7 +2937,7 @@ async function loadBotSnapshot(silent = false) {
     }
   }));
   savePriceCache();
-  renderSidebar(); renderTabs(); renderWatchlist();
+  renderSidebar(); renderDashboard(); renderTabs(); renderWatchlist();
 }
 
 async function loadBotTickers() {
@@ -2735,12 +2972,14 @@ function renderBotKpis() {
   }
 
   // DD warning
-  const ddWarn = document.getElementById('botDdWarn');
-  if (s.drawdown_pct != null && s.drawdown_pct <= -10) {
-    ddWarn.style.display = 'block';
-    ddWarn.textContent = `⚠ DRAWDOWN STOP · ${s.drawdown_pct.toFixed(1)}% — aperturas pausadas`;
-  } else {
-    ddWarn.style.display = 'none';
+  const ddWarn = document.getElementById('dashDdWarn');
+  if (ddWarn) {
+    if (s.drawdown_pct != null && s.drawdown_pct <= -10) {
+      ddWarn.classList.add('show');
+      ddWarn.textContent = `⚠ DRAWDOWN STOP · ${s.drawdown_pct.toFixed(1)}% — aperturas pausadas`;
+    } else {
+      ddWarn.classList.remove('show');
+    }
   }
 
   // KPIs
