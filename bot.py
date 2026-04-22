@@ -4,7 +4,7 @@ Conecta a IBKR Paper Account y ejecuta la estrategia swing
 sobre la canasta de tickers validada en el backtester.
 
 Estrategia: breakout de 8 días + volumen + ADX. LONG y SHORT.
-Timeframe: diario. Ejecución: cada día a las 15:55 ET (5 min antes del cierre).
+Timeframe: diario. Ejecución: cada día a las 15:30 ET (30 min antes del cierre).
 Backtested 2020-2026: Sharpe 1.73 | MaxDD -11.6% | Win Rate 45.4% | PF 1.25
 
 SETUP (una sola vez):
@@ -17,7 +17,7 @@ USO:
   python bot.py --run       # ejecutar señales ahora
   python bot.py --dry-run   # señales sin colocar órdenes
   python bot.py --status    # ver posiciones abiertas
-  python bot.py --daemon    # correr automático cada día a las 15:55 ET
+  python bot.py --daemon    # correr automático cada día a las 15:30 ET
   python bot.py --close ALL # cerrar todas las posiciones
 """
 
@@ -424,6 +424,99 @@ def get_market_price(ib, ticker):
         return None
 
 
+def sync_positions_with_ibkr(ib, state):
+    """Reconcilia state['positions'] contra las posiciones reales en IBKR.
+
+    Si el trailing stop cerró una posición entre runs, IBKR ya no la tiene
+    pero el state sí. Sin esta reconciliación, el bot cree que sigue
+    posicionado y no re-entra aunque la señal permanezca viva.
+
+    Matching por ticker + qty con signo (LONG=+, SHORT=-):
+      - 1 sola estrategia por ticker y discrepancia → esa se cerró.
+      - Varias estrategias por ticker → matchear la que cuadra con el diff.
+      - Caso ambiguo (varias cuadrarían) → no tocar, avisar.
+
+    Ignora posiciones que IBKR tiene pero el state no (podrían ser manuales).
+    """
+    if not state['positions']:
+        return
+
+    ibkr_qty = {}
+    for p in ib.positions():
+        sym = p.contract.symbol
+        ibkr_qty[sym] = ibkr_qty.get(sym, 0) + int(p.position)
+
+    state_by_ticker = {}
+    for key, pos in state['positions'].items():
+        t = pos.get('ticker', key.split('__')[0])
+        signed = pos['size'] if pos['dir'] == 'LONG' else -pos['size']
+        state_by_ticker.setdefault(t, []).append((key, signed, pos))
+
+    orphans = []
+    for ticker, state_positions in state_by_ticker.items():
+        expected = sum(s for _, s, _ in state_positions)
+        actual   = ibkr_qty.get(ticker, 0)
+
+        if expected == actual:
+            continue
+
+        diff = expected - actual
+
+        if len(state_positions) == 1:
+            key, _, pos = state_positions[0]
+            orphans.append((key, pos))
+        else:
+            matches = [(k, s, p) for k, s, p in state_positions if s == diff]
+            if len(matches) == 1:
+                k, _, p = matches[0]
+                orphans.append((k, p))
+            else:
+                log.warning(f"⚠ {ticker}: desincronización ambigua state/IBKR "
+                            f"(esperado {expected}, IBKR {actual}) — no se toca")
+                notifier.notify(
+                    f"⚠️ <b>Desincronización {ticker}</b>\n"
+                    f"State espera {expected} sh, IBKR tiene {actual} sh.\n"
+                    f"Revisá manual — varias estrategias activas en este ticker."
+                )
+
+    for key, pos in orphans:
+        ticker = pos.get('ticker', key.split('__')[0])
+        strat  = pos.get('strategy', '?')
+
+        exit_price = get_market_price(ib, ticker)
+        pnl = None
+        if exit_price and pos.get('entry'):
+            mult = 1 if pos['dir'] == 'LONG' else -1
+            pnl = (exit_price - pos['entry']) * pos['size'] * mult
+
+        pnl_str = f"${pnl:+,.2f}" if pnl is not None else "?"
+        log.info(f"Huérfana detectada: {ticker} [{strat}] {pos['dir']} "
+                 f"cerrada fuera del bot (trailing stop). P&L≈{pnl_str}")
+
+        log_trade(state, 'close', ticker, strat, pos['dir'],
+                  price=exit_price, size=pos['size'], entry=pos.get('entry'),
+                  pnl=pnl, indicators=pos.get('indicators'))
+
+        if exit_price:
+            notifier.notify(
+                f"🔴 <b>{ticker} [{strat}] {pos['dir']} — trailing stop</b>\n"
+                f"Cerrada por IBKR entre runs.\n"
+                f"Exit ≈ ${exit_price:.2f}  |  Entry ${pos.get('entry',0):.2f}\n"
+                f"P&L ≈ <b>{pnl_str}</b>"
+            )
+        else:
+            notifier.notify(
+                f"🔴 <b>{ticker} [{strat}] {pos['dir']} — trailing stop</b>\n"
+                f"Cerrada por IBKR entre runs (precio indet.)."
+            )
+
+        del state['positions'][key]
+
+    if orphans:
+        save_state(state)
+        log.info(f"Sync IBKR: {len(orphans)} posición(es) huérfana(s) removidas del state")
+
+
 def close_position(ib, key, state):
     """Cierra la posición identificada por su clave (ticker__strategy)."""
     if key not in state['positions']:
@@ -479,6 +572,11 @@ def run_signals(dry_run=False):
     2. Compara con posiciones abiertas
     3. Cierra posiciones donde la señal cambió
     4. Abre posiciones donde hay señal nueva
+
+    Retorna True si el ciclo fue "válido" (ejecutó trades o no había nada que
+    hacer), False si había señales pendientes pero TODAS se descartaron por
+    falta de precio IBKR. El daemon usa este retorno para decidir si marca el
+    día como completado o reintenta.
     """
     state = load_state()
     log.info("═" * 50)
@@ -498,15 +596,20 @@ def run_signals(dry_run=False):
             current = state['positions'].get(key, {}).get('dir', 'FLAT')
             action = '(sin cambio)' if d == current else f'→ cambiar de {current} a {d}'
             log.info(f"  [{strat:<8}] {ticker:<6} {d:<6} {action}")
-        return
+        return True
 
     ib = connect_ibkr()
     if not ib:
         log.error("Abortando — sin conexión a IBKR.")
-        return
+        return False
 
     equity = get_equity(ib)
     log.info(f"Equity cuenta: ${equity:,.2f}")
+
+    # Reconciliar state vs IBKR: si el trailing stop cerró algo entre runs,
+    # hay que sacarlo del state o el bot no re-entra aunque la señal siga.
+    log.info("── Sync posiciones con IBKR ──")
+    sync_positions_with_ibkr(ib, state)
 
     # Precios live de IBKR (la señal se genera con yfinance pero la entrada
     # se ejecuta con el precio real del broker para evitar usar el close del
@@ -550,6 +653,10 @@ def run_signals(dry_run=False):
     cycle_summary = {'opened': [], 'closed': [], 'equity': equity,
                      'dd': current_dd, 'peak': peak_equity, 'dd_paused': dd_paused}
 
+    # Contadores para el retorno: si todas las señales pendientes se caen por
+    # falta de precio IBKR, el ciclo fue "estéril" y el daemon debe reintentar.
+    dropped_no_price = 0
+
     for (ticker, strat), (sig, atr_val, price_yf, snap) in signals.items():
         if not atr_val:
             continue
@@ -562,8 +669,12 @@ def run_signals(dry_run=False):
         if not price:
             new_dir_preview = {1: 'LONG', -1: 'SHORT', 0: 'FLAT'}.get(sig, 'FLAT')
             if new_dir_preview != 'FLAT':
-                log.warning(f"[{strat}] {ticker}: señal {new_dir_preview} descartada — "
-                            f"sin precio IBKR real-time")
+                current_pos = state['positions'].get(pos_key(ticker, strat))
+                current_dir = current_pos['dir'] if current_pos else 'FLAT'
+                if new_dir_preview != current_dir:
+                    dropped_no_price += 1
+                    log.warning(f"[{strat}] {ticker}: señal {new_dir_preview} descartada — "
+                                f"sin precio IBKR real-time")
             continue
 
         cfg = STRATEGIES[strat]
@@ -622,10 +733,13 @@ def run_signals(dry_run=False):
                       indicators=snap)
             cycle_summary['opened'].append((ticker, strat, new_dir, price, stop, trail_dist, size))
 
+            notional = price * size
+            pct_equity = (notional / equity * 100) if equity > 0 else 0
             notifier.notify(
                 f"🟢 <b>Apertura</b>  {ticker} [{strat}] {new_dir}\n"
-                f"Entry ${price:.2f}  |  Size {size}\n"
-                f"SL ${stop:.2f}   |  Trail ${trail_dist:.2f} ({2} ATR)"
+                f"{size:,} acciones a ${price:,.2f}\n"
+                f"Total: <b>${notional:,.0f}</b> ({pct_equity:.1f}% equity)\n"
+                f"SL ${stop:,.2f}  |  Trail ${trail_dist:.2f} (2 ATR)"
             )
 
             save_state(state)
@@ -647,9 +761,15 @@ def run_signals(dry_run=False):
                 p_str = f"${p:+,.0f}" if p is not None else "?"
                 lines.append(f"  • {t} [{s}] {d} → {p_str}")
         if n_open:
-            lines.append(f"\n<b>Aperturas ({n_open}):</b>")
+            total_invested = sum(entry * sz for _, _, _, entry, _, _, sz in cycle_summary['opened'])
+            total_pct = (total_invested / equity * 100) if equity > 0 else 0
+            lines.append(f"\n<b>Aperturas ({n_open}) — total ${total_invested:,.0f} "
+                         f"({total_pct:.1f}% equity):</b>")
             for t, s, d, entry, sl, trail, sz in cycle_summary['opened']:
-                lines.append(f"  • {t} [{s}] {d} × {sz}  @${entry:.2f}")
+                notional = entry * sz
+                pct = (notional / equity * 100) if equity > 0 else 0
+                lines.append(f"  • {t} [{s}] {d}: {sz:,} × ${entry:,.2f} = "
+                             f"<b>${notional:,.0f}</b> ({pct:.1f}%)")
         dd_tag = f"  |  DD {cycle_summary['dd']*100:.1f}%" if cycle_summary['dd'] < 0 else ""
         lines.append(f"\nPeak ${cycle_summary['peak']:,.0f}{dd_tag}")
         notifier.notify('\n'.join(lines))
@@ -660,7 +780,25 @@ def run_signals(dry_run=False):
             f"Equity ${cycle_summary['equity']:,.0f}  |  Pos {open_pos}{dd_tag}"
         )
 
-    log.info("Ciclo completado.")
+    # Ciclo es "válido" salvo que todas las señales pendientes se hayan
+    # descartado por falta de precio IBKR. Ese caso (IBKR conecta pero
+    # reqMktData no devuelve nada) NO debe marcar el día como ejecutado.
+    n_open  = len(cycle_summary['opened'])
+    n_close = len(cycle_summary['closed'])
+    cycle_valid = not (dropped_no_price > 0 and n_open == 0 and n_close == 0)
+
+    if cycle_valid:
+        log.info("Ciclo completado.")
+    else:
+        log.warning(f"Ciclo estéril: {dropped_no_price} señales pendientes descartadas "
+                    f"por falta de precio IBKR. No se marca como ejecutado — el daemon "
+                    f"reintentará.")
+        notifier.notify(
+            f"⚠️ <b>Ciclo estéril</b>\n"
+            f"{dropped_no_price} señales descartadas por falta de precio IBKR.\n"
+            f"Revisá IB Gateway (market data). El daemon reintenta."
+        )
+    return cycle_valid
 
 
 # ══════════════════════════════════════════
@@ -668,7 +806,12 @@ def run_signals(dry_run=False):
 # ══════════════════════════════════════════
 
 def _status_lines():
-    """Genera las líneas del status (reutilizable para print y Telegram)."""
+    """Genera las líneas del status (reutilizable para print y Telegram).
+
+    El % de equity se calcula sobre `current_equity` del state (último valor
+    conocido, actualizado en cada run). Usa el notional de entrada, no el
+    mark-to-market actual — para ver P&L real usar --history.
+    """
     state = load_state()
     lines = []
     lines.append("══ BOT STATUS ══")
@@ -680,16 +823,24 @@ def _status_lines():
         lines.append("  Posiciones:    ninguna abierta")
         return lines, state
 
+    equity = state.get('current_equity', 0) or 0
+    total_notional = sum((p['entry'] or 0) * (p['size'] or 0) for p in positions.values())
+    total_pct = (total_notional / equity * 100) if equity > 0 else 0
+
+    lines.append("")
+    lines.append(f"  Equity: ${equity:,.0f}  |  Desplegado: ${total_notional:,.0f} "
+                 f"({total_pct:.1f}%)")
     lines.append("")
     lines.append(f"  {'Ticker':<7} {'Estr':<9} {'Dir':<6} {'Entry':>8} {'Stop':>8} "
-                 f"{'Trail':>7} {'Size':>6}  Fecha")
-    lines.append("  " + "─" * 75)
+                 f"{'Size':>6} {'Notional':>11} {'%Eq':>6}  Fecha")
+    lines.append("  " + "─" * 85)
     for key, p in positions.items():
         ticker = p.get('ticker', key.split('__')[0])
         strat  = p.get('strategy', key.split('__')[-1] if '__' in key else '?')
-        trail  = p.get('trail_dist', 0) or 0
+        notional = (p['entry'] or 0) * (p['size'] or 0)
+        pct = (notional / equity * 100) if equity > 0 else 0
         lines.append(f"  {ticker:<7} {strat:<9} {p['dir']:<6} {p['entry']:>8.2f} "
-                     f"{p['stop']:>8.2f} ${trail:>6.2f} {p['size']:>6}  "
+                     f"{p['stop']:>8.2f} {p['size']:>6} ${notional:>10,.0f} {pct:>5.1f}%  "
                      f"{p.get('entry_date','?')}")
     # DD info
     peak = state.get('peak_equity', 0)
@@ -706,18 +857,25 @@ def notify_status():
     """Manda el status actual al chat de Telegram."""
     lines, state = _status_lines()
     positions = state.get('positions', {})
+    equity = state.get('current_equity', 0) or 0
+    total_notional = sum((p['entry'] or 0) * (p['size'] or 0) for p in positions.values())
+    total_pct = (total_notional / equity * 100) if equity > 0 else 0
+
     msg_lines = [f"📋 <b>Status del bot</b>",
                  f"Último run: {state.get('last_run','nunca')}",
                  f"Trades totales: {state.get('total_trades',0)}",
                  f"Posiciones abiertas: {len(positions)}"]
     if positions:
+        msg_lines.append(f"Equity: ${equity:,.0f}  |  Desplegado: "
+                         f"<b>${total_notional:,.0f} ({total_pct:.1f}%)</b>")
         msg_lines.append("")
         for key, p in positions.items():
             ticker = p.get('ticker', key.split('__')[0])
             strat  = p.get('strategy', '?')
-            trail  = p.get('trail_dist', 0) or 0
-            msg_lines.append(f"• {ticker} [{strat}] {p['dir']} × {p['size']} "
-                             f"@${p['entry']:.2f}  SL${p['stop']:.2f}  trail${trail:.2f}")
+            notional = (p['entry'] or 0) * (p['size'] or 0)
+            pct = (notional / equity * 100) if equity > 0 else 0
+            msg_lines.append(f"• {ticker} [{strat}] {p['dir']} × {p['size']:,} "
+                             f"@${p['entry']:.2f}  =  <b>${notional:,.0f} ({pct:.1f}%)</b>")
     sent = notifier.notify('\n'.join(msg_lines))
     if not sent:
         print("Telegram no configurado o falló el envío.")
@@ -759,33 +917,63 @@ def print_history(n=20):
 # ══════════════════════════════════════════
 
 def start_daemon():
-    # Timezone-aware: siempre ejecuta 15:55 hora de Nueva York (= 5 min antes
-    # del cierre del mercado US), independiente del timezone del server.
-    # Arregla el bug previo donde schedule.at('15:55') usaba hora local —
-    # si el server estaba en Argentina corría a las 15:55 ART = 14:55 ET,
-    # 65 min antes del cierre.
+    # Ventana de ejecución: 15:30 → 20:00 ET. Target es 15:30 (30 min antes
+    # del cierre, deja margen de fill). Catch-up hasta 20:00 (fin extended
+    # hours): si arrancás el daemon tarde o pasó algo que lo tiró, igual
+    # dispara ese día. Después de 16:00 los LimitOrder no fillan ese día
+    # (extended hours requiere outsideRth=True que no seteamos) → quedan
+    # en queue y agarran la próxima apertura (09:30 ET del siguiente hábil).
+    # Eso cubre también el caso "corre al inicio del mercado" sin código extra.
+    #
+    # Persistimos last_daemon_run_date en state para ser robusto a restarts
+    # múltiples en el mismo día (sin esto, parar y arrancar el daemon dos
+    # veces dispararía señales dos veces y duplicaría trades).
     from zoneinfo import ZoneInfo
     ny = ZoneInfo('America/New_York')
 
-    log.info("Daemon iniciado. Ejecutará señales cada día hábil a las 15:55 ET.")
+    def within_trigger_window(now):
+        if now.weekday() >= 5:
+            return False
+        minutes = now.hour * 60 + now.minute
+        return 15 * 60 + 30 <= minutes <= 20 * 60
+
+    def load_last_daemon_date():
+        state = load_state()
+        v = state.get('last_daemon_run_date')
+        if not v:
+            return None
+        try:
+            return datetime.strptime(v, '%Y-%m-%d').date()
+        except ValueError:
+            return None
+
+    def save_last_daemon_date(d):
+        state = load_state()
+        state['last_daemon_run_date'] = d.isoformat()
+        save_state(state)
+
+    log.info("Daemon iniciado. Target 15:30 ET (catch-up hasta 20:00 ET).")
+    log.info("Orders post-cierre queuean para la próxima apertura (09:30 ET).")
     log.info("(Presioná Ctrl+C para detener)")
 
     # Dry run inicial para verificar conectividad y señales
     run_signals(dry_run=True)
 
-    last_run_date = None
+    last_run_date = load_last_daemon_date()
     while True:
         now_ny = datetime.now(ny)
-        # Lunes-viernes, 15:55 NY, una vez por día
-        if (now_ny.weekday() < 5
-                and now_ny.hour == 15 and now_ny.minute == 55
-                and now_ny.date() != last_run_date):
+        if within_trigger_window(now_ny) and now_ny.date() != last_run_date:
             log.info(f"Trigger {now_ny:%Y-%m-%d %H:%M %Z} → ejecutando señales")
             try:
-                run_signals()
+                valid = run_signals()
+                # Solo marcamos el día como ejecutado si el ciclo fue válido.
+                # Ciclo estéril (IBKR sin market data) → no persiste, reintenta
+                # en el próximo tick del loop (30s).
+                if valid:
+                    last_run_date = now_ny.date()
+                    save_last_daemon_date(last_run_date)
             except Exception as e:
                 log.exception(f"Error en run_signals: {e}")
-            last_run_date = now_ny.date()
         time.sleep(30)
 
 
@@ -803,7 +991,7 @@ def main():
                        help='Ver últimos N eventos del historial (default 20)')
     group.add_argument('--notify-status', action='store_true',
                        help='Mandar el status actual por Telegram')
-    group.add_argument('--daemon',   action='store_true', help='Correr como daemon (cada día 15:55 ET)')
+    group.add_argument('--daemon',   action='store_true', help='Correr como daemon (target 15:30 ET, catch-up hasta 20:00)')
     group.add_argument('--close',    metavar='TICKER',    help='Cerrar posición (ticker o ALL)')
     args = parser.parse_args()
 
