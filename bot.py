@@ -210,30 +210,120 @@ def _indicator_snapshot(row):
     }
 
 
-def get_signal(ticker, strategy_name):
+def fetch_bars_ibkr(ib, ticker, timeframe='1d'):
+    """Trae velas del broker IBKR en formato compatible con add_indicators.
+
+    Fuente primaria de señales: más fresca que yfinance (que tiene ~15-30 min
+    de delay en el feed gratuito y a veces tarda hasta el after-market en
+    publicar la vela del día). Por eso el bot entraba a TSLA el 21 con una
+    señal "vieja" del 17 — yfinance aún no tenía ni la vela del 20 publicada.
+
+    Retorna DataFrame con columnas Open/High/Low/Close/Volume indexado por
+    fecha. DataFrame vacío si IBKR no responde — el caller debe fallback a yf.
+    """
+    if timeframe == '1wk':
+        duration, bar_size = '5 Y', '1 week'
+    else:
+        duration, bar_size = '1 Y', '1 day'
+
+    try:
+        contract = Stock(ticker, 'SMART', 'USD')
+        ib.qualifyContracts(contract)
+        bars = ib.reqHistoricalData(
+            contract,
+            endDateTime='',
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow='TRADES',
+            useRTH=True,
+            formatDate=1,
+            keepUpToDate=False,
+        )
+        if not bars:
+            return pd.DataFrame()
+        df = util.df(bars)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low',
+                                'close': 'Close', 'volume': 'Volume', 'date': 'Date'})
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        return df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+    except Exception as e:
+        log.warning(f"IBKR bars {ticker} [{timeframe}]: {e}")
+        return pd.DataFrame()
+
+
+def _last_complete_bar_idx(df, timeframe):
+    """Decide si `iloc[-1]` es una vela cerrada o todavía en progreso.
+
+    Retorna -1 si la última barra ya cerró (usable directo), -2 si está en
+    curso (hay que caer a la anterior). Es la corrección del bug del TSLA:
+    antes usábamos siempre -2, lo que implicaba "un día de retraso" incluso
+    cuando la barra de ayer ya era completa hace 24h.
+
+    Reglas:
+      - Diario: si la última barra es de antes de hoy ET → completa.
+                Si es de hoy y mercado ya cerró (≥16:00 ET) → completa.
+                Si es de hoy y mercado abierto → parcial.
+      - Semanal: si la última barra es de una semana ISO anterior → completa.
+                 Si es de esta semana, completa solo después del cierre del
+                 viernes (viernes ≥16:00 ET, o fin de semana).
+    """
+    from zoneinfo import ZoneInfo
+    ny = ZoneInfo('America/New_York')
+    now_et = datetime.now(ny)
+    last_ts = df.index[-1]
+    if hasattr(last_ts, 'to_pydatetime'):
+        last_ts = last_ts.to_pydatetime()
+    market_closed = now_et.hour >= 16
+
+    if timeframe == '1wk':
+        current_week = now_et.isocalendar()[:2]
+        last_week    = last_ts.isocalendar()[:2]
+        if last_week < current_week:
+            return -1
+        # Semana en curso: solo se considera completa post-cierre del viernes
+        if now_et.weekday() > 4 or (now_et.weekday() == 4 and market_closed):
+            return -1
+        return -2
+
+    # Diario
+    if last_ts.date() < now_et.date():
+        return -1
+    if last_ts.date() == now_et.date() and market_closed:
+        return -1
+    return -2
+
+
+def get_signal(ticker, strategy_name, ib=None):
     """
     Devuelve la señal de la última barra completa para la estrategia dada.
       +1 = LONG | -1 = SHORT | 0 = sin señal
-    Retorna: (signal, atr, price, snapshot) donde snapshot es el dict de
-    indicadores en la barra que generó la señal (o None si no hay datos).
+    Retorna: (signal, atr, price, snapshot).
 
-    El timeframe viene por estrategia: diario o semanal. Weekly necesita más
-    histórico porque add_indicators calcula EMA 200 (200 barras semanales ≈ 4 años).
+    Source preference: IBKR > yfinance. yfinance es fallback cuando IBKR
+    no está o responde vacío. La diferencia real importa en timing: yfinance
+    puede tener la barra de hoy aún sin publicar mientras IBKR la tiene lista.
     """
     cfg = STRATEGIES[strategy_name]
     timeframe = cfg.get('timeframe', '1d')
-
-    # Window de fetch: daily 1 año es ~252 barras, weekly 5 años son ~260 barras.
-    fetch_days = 365 * 5 if timeframe == '1wk' else 365
-    # Umbral mínimo de barras después del dropna
     min_bars = 30 if timeframe == '1wk' else 50
 
-    end   = datetime.now().strftime('%Y-%m-%d')
-    start = (datetime.now() - timedelta(days=fetch_days)).strftime('%Y-%m-%d')
+    df = pd.DataFrame()
+    source = 'ibkr'
+    if ib is not None:
+        df = fetch_bars_ibkr(ib, ticker, timeframe)
 
-    df = fetch(ticker, start, end, interval=timeframe)
+    if df.empty:
+        source = 'yfinance'
+        fetch_days = 365 * 5 if timeframe == '1wk' else 365
+        end   = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=fetch_days)).strftime('%Y-%m-%d')
+        df = fetch(ticker, start, end, interval=timeframe)
+
     if df.empty or len(df) < min_bars:
-        log.warning(f"{ticker} [{strategy_name}]: datos insuficientes ({len(df)} barras)")
+        log.warning(f"{ticker} [{strategy_name}]: datos insuficientes ({len(df)} barras, src={source})")
         return 0, None, None, None
 
     df = add_indicators(df)
@@ -243,8 +333,11 @@ def get_signal(ticker, strategy_name):
     if len(df) < 2:
         return 0, None, None, None
 
-    # Última barra completa (no la del período en curso)
-    last = df.iloc[-2]
+    idx = _last_complete_bar_idx(df, timeframe)
+    if len(df) < abs(idx):
+        return 0, None, None, None
+
+    last     = df.iloc[idx]
     signal   = int(last['signal'])
     atr_val  = float(last['atr'])
     price    = float(df.iloc[-1]['Close'])
@@ -252,16 +345,17 @@ def get_signal(ticker, strategy_name):
     return signal, atr_val, price, snapshot
 
 
-def get_all_signals():
+def get_all_signals(ib=None):
     """
     Devuelve dict {(ticker, strategy): (signal, atr, price, snapshot)}
-    para toda combinación ticker × estrategia.
+    para toda combinación ticker × estrategia. Si `ib` se pasa, se usa
+    como fuente primaria de velas (más fresco que yfinance).
     """
     signals = {}
     for strategy_name in STRATEGIES:
         log.info(f"── Señales {strategy_name.upper()} ──")
         for t in TICKERS:
-            sig, atr_val, price, snap = get_signal(t, strategy_name)
+            sig, atr_val, price, snap = get_signal(t, strategy_name, ib=ib)
             signals[(t, strategy_name)] = (sig, atr_val, price, snap)
             d = {1: 'LONG', -1: 'SHORT', 0: 'FLAT'}.get(sig, '?')
             if price:
@@ -591,8 +685,18 @@ def run_signals(dry_run=False):
     log.info(f"Estrategias activas: {', '.join(STRATEGIES.keys())}")
     notifier.startup_msg()
 
+    # Conectar IBKR PRIMERO: sus velas son la fuente primaria de señales
+    # (evita el lag del feed gratuito de yfinance que entró tarde en TSLA).
+    # En dry_run también se conecta si puede — las señales salen más frescas.
+    ib = connect_ibkr()
+    if not ib and not dry_run:
+        log.error("Abortando — sin conexión a IBKR.")
+        return False
+    if not ib and dry_run:
+        log.warning("Sin IBKR en dry-run → señales con yfinance (puede haber lag).")
+
     log.info("Generando señales...")
-    signals = get_all_signals()
+    signals = get_all_signals(ib=ib)
 
     if dry_run:
         log.info("\nDRY RUN — señales generadas pero sin ejecutar.")
@@ -602,12 +706,9 @@ def run_signals(dry_run=False):
             current = state['positions'].get(key, {}).get('dir', 'FLAT')
             action = '(sin cambio)' if d == current else f'→ cambiar de {current} a {d}'
             log.info(f"  [{strat:<8}] {ticker:<6} {d:<6} {action}")
+        if ib:
+            ib.disconnect()
         return True
-
-    ib = connect_ibkr()
-    if not ib:
-        log.error("Abortando — sin conexión a IBKR.")
-        return False
 
     equity = get_equity(ib)
     log.info(f"Equity cuenta: ${equity:,.2f}")
@@ -617,9 +718,9 @@ def run_signals(dry_run=False):
     log.info("── Sync posiciones con IBKR ──")
     sync_positions_with_ibkr(ib, state)
 
-    # Precios live de IBKR (la señal se genera con yfinance pero la entrada
-    # se ejecuta con el precio real del broker para evitar usar el close del
-    # día anterior cuando yfinance droppea la vela parcial del día en curso).
+    # Precios live para ejecución: `signals[...].price` ya viene de IBKR
+    # (historicalData close), pero el spot para entradas conviene traerlo
+    # con reqMktData para capturar cualquier movida post-cierre.
     log.info("── Precios real-time (IBKR) ──")
     ibkr_prices = {}
     yf_price_by_ticker = {}
