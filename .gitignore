@@ -6,7 +6,12 @@
 # Estado y logs del bot
 bot.log
 bot_state.json
+bot_state.json.bak.*
 sessionID.txt
+
+# Statements de IBKR (contienen número de cuenta y posiciones)
+DUP*.csv
+*activity*.csv
 
 # Cache Python
 __pycache__/
