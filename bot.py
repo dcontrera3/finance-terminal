@@ -39,7 +39,7 @@ from backtester import (
 import notifier
 
 try:
-    from ib_insync import IB, Stock, LimitOrder, StopOrder, MarketOrder, Order, util
+    from ib_insync import IB, Stock, StopOrder, MarketOrder, Order, util
     IB_AVAILABLE = True
 except ImportError:
     IB_AVAILABLE = False
@@ -447,11 +447,14 @@ def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
     action       = 'BUY'  if direction == 'LONG' else 'SELL'
     close_action = 'SELL' if direction == 'LONG' else 'BUY'
 
-    # Entrada: limit a ±0.5% del precio para garantizar fill
-    limit_price = round(entry * 1.005 if direction == 'LONG' else entry * 0.995, 2)
-
+    # Entrada: MarketOrder. El bot corre 15:30 ET con mercado abierto, así que
+    # la orden ejecuta inmediatamente. Antes era LimitOrder a ±0.5% pero la
+    # limit podía quedar pendiente cruzando overnight si no llenaba ese día,
+    # exponiéndonos a gap risk: ~5% de noches tienen gap > 1 ATR (medido sobre
+    # 2y de la canasta). Para mega-caps líquidos el slippage de market es
+    # 0.01-0.05% por trade, mucho menor que un gap overnight de 1-2 ATRs.
     parent_id = ib.client.getReqId()
-    parent = LimitOrder(action, size, limit_price)
+    parent = MarketOrder(action, size)  # type: ignore
     parent.orderId  = parent_id
     parent.transmit = False          # no transmitir hasta enviar el hijo
 
@@ -468,7 +471,7 @@ def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
     parent_trade = ib.placeOrder(contract, parent)
     trail_trade  = ib.placeOrder(contract, trail)
 
-    log.info(f"  Parent: {action} {size} {ticker} @limit ${limit_price}")
+    log.info(f"  Parent: {action} {size} {ticker} @MARKET")
     log.info(f"  Trail:  {close_action} {size} {ticker}  trail=${trail_distance:.2f}  "
              f"stop0=${stop:.2f}")
 
