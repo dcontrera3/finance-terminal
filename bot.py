@@ -109,6 +109,12 @@ STRATEGIES = {
 MAX_POS_PCT        = 0.25   # máximo 25% del equity por posición individual
 DD_PAUSE_THRESHOLD = 0.10   # -10% desde el peak → pausar nuevas aperturas
 
+# Breakeven lock: cuando un trade alcanza este % de ganancia, subimos el stop
+# al precio de entry. Garantiza que no podés volver al rojo, sin sacrificar
+# casi nada de la edge del trailing (el TRAIL nativo de IBKR sigue activo y
+# va a subir el stop más allá del entry cuando el precio supere entry + auxPrice).
+BREAKEVEN_TRIGGER_PCT = 0.03   # +3% en ganancia → mover stop a entry
+
 # IBKR
 IB_HOST = '127.0.0.1'
 IB_PORT = 4002          # IB Gateway paper → 4002 | TWS paper → 7497
@@ -470,6 +476,34 @@ def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
     return [parent_trade.order.orderId, trail_trade.order.orderId]
 
 
+def get_fill_price(ib, order_id):
+    """Busca en ib.fills() el avgPrice ejecutado para `order_id`.
+
+    Si hay múltiples fills parciales del mismo orderId, promedia ponderado por
+    shares. Retorna (avg_price, total_shares, last_ts) o (None, 0, None) si no
+    aparece ninguna ejecución (fill anterior al día actual o orderId inválido).
+    """
+    if not order_id:
+        return None, 0, None
+    try:
+        ib.reqExecutions()
+        ib.sleep(0.5)
+    except Exception as e:
+        log.warning(f"reqExecutions falló: {e}")
+
+    matches = [f for f in ib.fills() if f.execution.orderId == int(order_id)]
+    if not matches:
+        return None, 0, None
+
+    total = sum(float(f.execution.shares) for f in matches)
+    if not total:
+        return None, 0, None
+    avg = sum(float(f.execution.avgPrice) * float(f.execution.shares)
+              for f in matches) / total
+    last_ts = max(f.execution.time for f in matches)
+    return avg, int(total), last_ts
+
+
 def get_market_price(ib, ticker):
     """Precio actual de mercado desde IBKR.
 
@@ -516,6 +550,84 @@ def get_market_price(ib, ticker):
     except Exception as e:
         log.warning(f"get_market_price({ticker}) falló: {e}")
         return None
+
+
+def lock_breakeven_stops(ib, state, prices):
+    """Para cada posición abierta que esté en >=BREAKEVEN_TRIGGER_PCT de ganancia
+    y aún tenga el stop debajo del entry (LONG) o por encima (SHORT), modifica
+    la orden TRAIL en IBKR para anclar el stop al entry.
+
+    Esto garantiza que la posición no pueda volver al rojo. El TRAIL nativo de
+    IBKR sigue activo y va a continuar subiendo el stop si el precio sigue a
+    favor (cuando supere entry + auxPrice).
+    """
+    if not state.get('positions'):
+        return
+    locked_any = False
+    for key, pos in list(state['positions'].items()):
+        if pos.get('breakeven_locked'):
+            continue
+        ticker = pos['ticker']
+        entry  = pos['entry']
+        stop   = pos['stop']
+        size   = pos['size']
+        d      = pos['dir']
+        price  = prices.get(ticker)
+        if not price:
+            continue
+
+        # Cálculo de PnL % y condición de breakeven
+        pnl_pct = (price - entry) / entry if d == 'LONG' else (entry - price) / entry
+        if pnl_pct < BREAKEVEN_TRIGGER_PCT:
+            continue
+        # Si el stop ya pasó el entry, el TRAIL nativo ya hizo su trabajo, skip.
+        if (d == 'LONG' and stop >= entry) or (d == 'SHORT' and stop <= entry):
+            pos['breakeven_locked'] = True
+            continue
+
+        order_ids = pos.get('order_ids') or []
+        if len(order_ids) < 2:
+            log.warning(f"[{key}] sin orderId de TRAIL guardado, no se puede mover el stop")
+            continue
+        trail_order_id = order_ids[1]
+        trail_dist     = pos.get('trail_dist')
+        if not trail_dist:
+            continue
+
+        try:
+            contract = Stock(ticker, 'SMART', 'USD')
+            ib.qualifyContracts(contract)
+
+            close_action = 'SELL' if d == 'LONG' else 'BUY'
+            new_trail = Order()
+            new_trail.orderId        = int(trail_order_id)
+            new_trail.action         = close_action
+            new_trail.orderType      = 'TRAIL'
+            new_trail.totalQuantity  = int(size)
+            new_trail.auxPrice       = float(trail_dist)
+            new_trail.trailStopPrice = float(round(entry, 2))
+            new_trail.transmit       = True
+            ib.placeOrder(contract, new_trail)
+            ib.sleep(1)
+
+            pos['stop'] = round(entry, 2)
+            pos['breakeven_locked'] = True
+            locked_any = True
+            log.info(f"[{key}] BREAKEVEN LOCK: stop {stop:.2f} → {entry:.2f} "
+                     f"(precio {price:.2f}, +{pnl_pct*100:.2f}%)")
+            try:
+                notifier.notify(
+                    f"🛡 <b>{ticker} [{pos.get('strategy','')}] {d} — breakeven lock</b>\n"
+                    f"Precio ${price:,.2f}  |  +{pnl_pct*100:.2f}%\n"
+                    f"Stop ${stop:,.2f} → ${entry:,.2f} (entry)"
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            log.warning(f"[{key}] no se pudo subir el stop a breakeven: {e}")
+
+    if locked_any:
+        save_state(state)
 
 
 def sync_positions_with_ibkr(ib, state):
@@ -577,7 +689,20 @@ def sync_positions_with_ibkr(ib, state):
         ticker = pos.get('ticker', key.split('__')[0])
         strat  = pos.get('strategy', '?')
 
-        exit_price = get_market_price(ib, ticker)
+        order_ids = pos.get('order_ids') or []
+        trail_order_id = order_ids[1] if len(order_ids) >= 2 else None
+        exit_price, fill_shares, fill_ts = get_fill_price(ib, trail_order_id)
+
+        if exit_price:
+            exit_source = 'fill'
+            log.info(f"[{ticker}] fill real del trail @ ${exit_price:.4f} "
+                     f"({fill_shares} sh, ts={fill_ts})")
+        else:
+            exit_price = get_market_price(ib, ticker)
+            exit_source = 'mkt_approx'
+            log.warning(f"[{ticker}] no se encontró fill (orderId={trail_order_id}); "
+                        f"PnL aproximado con precio de mercado actual")
+
         pnl = None
         pnl_pct = None
         if exit_price and pos.get('entry'):
@@ -587,8 +712,9 @@ def sync_positions_with_ibkr(ib, state):
 
         pnl_str = (f"${pnl:+,.2f} ({pnl_pct:+.2f}%)"
                    if pnl is not None and pnl_pct is not None else "?")
+        approx_tag = "" if exit_source == 'fill' else "  (aprox)"
         log.info(f"Huérfana detectada: {ticker} [{strat}] {pos['dir']} "
-                 f"cerrada fuera del bot (trailing stop). P&L≈{pnl_str}")
+                 f"cerrada fuera del bot (trailing stop). P&L≈{pnl_str}{approx_tag}")
 
         log_trade(state, 'close', ticker, strat, pos['dir'],
                   price=exit_price, size=pos['size'], entry=pos.get('entry'),
@@ -597,9 +723,9 @@ def sync_positions_with_ibkr(ib, state):
         if exit_price:
             notifier.notify(
                 f"🔴 <b>{ticker} [{strat}] {pos['dir']} — trailing stop</b>\n"
-                f"Cerrada por IBKR entre runs.\n"
+                f"Cerrada por IBKR entre runs ({exit_source}).\n"
                 f"Exit ≈ ${exit_price:.2f}  |  Entry ${pos.get('entry',0):.2f}\n"
-                f"P&L ≈ <b>{pnl_str}</b>"
+                f"P&L ≈ <b>{pnl_str}</b>{approx_tag}"
             )
         else:
             notifier.notify(
@@ -629,11 +755,30 @@ def close_position(ib, key, state):
 
     close_action = 'SELL' if pos['dir'] == 'LONG' else 'BUY'
     order = MarketOrder(close_action, pos['size'])  # type: ignore
-    ib.placeOrder(contract, order)
-    ib.sleep(1)
+    close_trade = ib.placeOrder(contract, order)
+    # Esperar al fill (hasta 10s) para obtener el precio real
+    for _ in range(20):
+        ib.sleep(0.5)
+        if close_trade.orderStatus.status == 'Filled':
+            break
 
-    # P&L estimado usando el último precio disponible
-    exit_price = get_market_price(ib, ticker) or pos.get('entry')
+    fill_price = None
+    if close_trade.orderStatus.status == 'Filled':
+        avg = float(close_trade.orderStatus.avgFillPrice or 0)
+        if avg > 0:
+            fill_price = avg
+    if fill_price is None and close_trade.fills:
+        total = sum(float(f.execution.shares) for f in close_trade.fills)
+        if total:
+            fill_price = sum(float(f.execution.avgPrice) * float(f.execution.shares)
+                             for f in close_trade.fills) / total
+
+    if fill_price:
+        exit_price = fill_price
+        log.info(f"[{ticker}] cierre fill real @ ${exit_price:.4f}")
+    else:
+        exit_price = get_market_price(ib, ticker) or pos.get('entry')
+        log.warning(f"[{ticker}] cierre sin fill confirmado; PnL aproximado con market price")
     pnl = None
     pnl_pct = None
     if exit_price and pos.get('entry'):
@@ -738,6 +883,12 @@ def run_signals(dry_run=False):
             log.info(f"  {t:<6} IBKR ${p:>9.2f}")
         else:
             log.warning(f"  {t:<6} sin precio IBKR (fallback yfinance)")
+
+    # Breakeven lock: subir stop al entry en posiciones que ya están en ganancia.
+    # Usa los precios IBKR fresh; si faltó alguno, esa posición se evalúa el ciclo
+    # siguiente.
+    log.info("── Breakeven lock ──")
+    lock_breakeven_stops(ib, state, ibkr_prices)
 
     # Tracking del peak para el drawdown stop
     peak_equity = max(state.get('peak_equity', equity), equity)
