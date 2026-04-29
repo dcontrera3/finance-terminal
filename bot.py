@@ -467,13 +467,35 @@ def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
 
     parent_trade = ib.placeOrder(contract, parent)
     trail_trade  = ib.placeOrder(contract, trail)
-    ib.sleep(1)
 
     log.info(f"  Parent: {action} {size} {ticker} @limit ${limit_price}")
     log.info(f"  Trail:  {close_action} {size} {ticker}  trail=${trail_distance:.2f}  "
              f"stop0=${stop:.2f}")
 
-    return [parent_trade.order.orderId, trail_trade.order.orderId]
+    # Esperar fill de la parent hasta 30s. Si el bot corre fuera del horario
+    # de mercado (típico: 15:30 ET = 30 min antes del close), la limit puede
+    # quedar pendiente hasta la apertura del día siguiente. En ese caso retornamos
+    # fill_price=None y la entry queda como "pending" hasta el próximo run.
+    fill_price = None
+    for _ in range(60):
+        ib.sleep(0.5)
+        if parent_trade.orderStatus.status == 'Filled':
+            avg = float(parent_trade.orderStatus.avgFillPrice or 0)
+            if avg > 0:
+                fill_price = avg
+            break
+    if fill_price is None and parent_trade.fills:
+        total = sum(float(f.execution.shares) for f in parent_trade.fills)
+        if total:
+            fill_price = sum(float(f.execution.avgPrice) * float(f.execution.shares)
+                             for f in parent_trade.fills) / total
+
+    if fill_price:
+        log.info(f"  Fill real parent @ ${fill_price:.4f}")
+    else:
+        log.info(f"  Parent aún pendiente — entry quedará como aprox hasta el próximo run")
+
+    return [parent_trade.order.orderId, trail_trade.order.orderId], fill_price
 
 
 def get_fill_price(ib, order_id):
@@ -628,6 +650,50 @@ def lock_breakeven_stops(ib, state, prices):
 
     if locked_any:
         save_state(state)
+
+
+def reconcile_pending_entries(ib, state):
+    """Para cada posición con entry_pending=True, busca el fill real de la
+    parent order (`order_ids[0]`) en ib.fills() y actualiza pos['entry'].
+
+    Esto cubre el caso típico: el bot abre una LimitOrder a las 15:30 ET (30
+    min antes del cierre); si no llena ese mismo día, la limit queda activa
+    hasta la apertura del día siguiente, y el entry real se conoce recién en
+    el próximo run.
+    """
+    pending = [(k, p) for k, p in state['positions'].items() if p.get('entry_pending')]
+    if not pending:
+        return
+
+    log.info(f"── Reconciliando entries pendientes ({len(pending)}) ──")
+    fixed = 0
+    for key, pos in pending:
+        order_ids = pos.get('order_ids') or []
+        if not order_ids:
+            continue
+        parent_id = order_ids[0]
+        avg, shares, ts = get_fill_price(ib, parent_id)
+        if not avg:
+            log.info(f"  {key}: parent {parent_id} aún sin fill recuperable")
+            continue
+
+        old_entry = pos.get('entry')
+        pos['entry'] = round(avg, 4)
+        pos['entry_pending'] = False
+        pos['entry_fill_ts'] = ts.isoformat() if ts else None
+        log.info(f"  {key}: entry {old_entry} → {pos['entry']} (fill real, {shares} sh)")
+        try:
+            notifier.notify(
+                f"📌 <b>Entry reconciliada</b>  {pos.get('ticker', key)} [{pos.get('strategy','')}]\n"
+                f"Decisión ${old_entry:.2f} → fill real ${pos['entry']:.4f}"
+            )
+        except Exception:
+            pass
+        fixed += 1
+
+    if fixed:
+        save_state(state)
+        log.info(f"Reconciliación: {fixed} entry(s) actualizada(s)")
 
 
 def sync_positions_with_ibkr(ib, state):
@@ -861,6 +927,7 @@ def run_signals(dry_run=False):
     # Reconciliar state vs IBKR: si el trailing stop cerró algo entre runs,
     # hay que sacarlo del state o el bot no re-entra aunque la señal siga.
     log.info("── Sync posiciones con IBKR ──")
+    reconcile_pending_entries(ib, state)
     sync_positions_with_ibkr(ib, state)
 
     # Precios live para ejecución: `signals[...].price` ya viene de IBKR
@@ -971,23 +1038,25 @@ def run_signals(dry_run=False):
                      f"entry={price:.2f}  stop={stop:.2f}  trail=${trail_dist:.2f}  "
                      f"size={size}")
 
-            order_ids = open_position(ib, ticker, new_dir, size, price, stop, trail_dist)
+            order_ids, fill_price = open_position(ib, ticker, new_dir, size, price, stop, trail_dist)
+            real_entry = fill_price if fill_price else price
             state['positions'][key] = {
                 'ticker':     ticker,
                 'strategy':   strat,
                 'dir':        new_dir,
-                'entry':      price,
+                'entry':      real_entry,
                 'stop':       stop,
                 'trail_dist': trail_dist,
                 'size':       size,
                 'entry_date': datetime.now().strftime('%Y-%m-%d'),
                 'order_ids':  order_ids,
                 'indicators': snap,
+                'entry_pending': fill_price is None,
             }
             state['total_trades'] = state.get('total_trades', 0) + 1
 
             log_trade(state, 'open', ticker, strat, new_dir,
-                      price=price, size=size, stop=stop, target=None, entry=price,
+                      price=real_entry, size=size, stop=stop, target=None, entry=real_entry,
                       indicators=snap)
             cycle_summary['opened'].append((ticker, strat, new_dir, price, stop, trail_dist, size))
 
