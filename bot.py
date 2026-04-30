@@ -434,51 +434,61 @@ def calc_position(equity, entry, atr_val, direction, strategy_name):
     return size, stop, round(trail_dist, 2)
 
 
+def place_trail_stop(ib, ticker, direction, size, stop, trail_distance):
+    """Coloca un TRAIL stop standalone (sin parentId). Retorna orderId.
+
+    IBKR rechaza con Error 328 si se intenta adjuntar un TRAIL como child de
+    una MarketOrder. Por eso lo separamos: parent MarketOrder primero, fill,
+    y recién entonces TRAIL standalone como protección de la posición.
+    """
+    contract = Stock(ticker, 'SMART', 'USD')
+    ib.qualifyContracts(contract)
+    close_action = 'SELL' if direction == 'LONG' else 'BUY'
+
+    trail = Order()
+    trail.action         = close_action
+    trail.orderType      = 'TRAIL'
+    trail.totalQuantity  = int(size)
+    trail.auxPrice       = float(trail_distance)
+    trail.trailStopPrice = float(stop)
+    trail.transmit       = True
+
+    trail_trade = ib.placeOrder(contract, trail)
+    log.info(f"  Trail standalone: {close_action} {size} {ticker}  "
+             f"trail=${trail_distance:.2f}  stop0=${stop:.2f}")
+    return trail_trade.order.orderId
+
+
 def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
     """
-    Coloca un bracket order con trailing stop en IBKR:
-      - Parent: LimitOrder de entrada
-      - Child (attached): TRAIL order que se mueve con el precio favorable
-    IBKR gestiona el trailing automáticamente en su servidor.
+    Abre posición en dos pasos:
+      1. Parent MarketOrder standalone (transmit=True).
+      2. Espera fill hasta 30s.
+      3. Si filleó → placea TRAIL standalone como protección.
+      4. Si NO filleó (mercado cerrado: parent quedó queued para 09:30 ET
+         siguiente) → trail queda en None. El próximo run de
+         reconcile_pending_entries detecta el fill y placea el TRAIL.
+
+    El bracket attached (parent + trail child con parentId) NO sirve acá:
+    IBKR rechaza con Error 328 los TRAIL adjuntos a MarketOrder.
+
+    Retorna ([parent_id, trail_id_or_None], fill_price).
     """
     contract = Stock(ticker, 'SMART', 'USD')
     ib.qualifyContracts(contract)
 
-    action       = 'BUY'  if direction == 'LONG' else 'SELL'
-    close_action = 'SELL' if direction == 'LONG' else 'BUY'
+    action = 'BUY' if direction == 'LONG' else 'SELL'
 
-    # Entrada: MarketOrder. El bot corre 15:30 ET con mercado abierto, así que
-    # la orden ejecuta inmediatamente. Antes era LimitOrder a ±0.5% pero la
-    # limit podía quedar pendiente cruzando overnight si no llenaba ese día,
-    # exponiéndonos a gap risk: ~5% de noches tienen gap > 1 ATR (medido sobre
-    # 2y de la canasta). Para mega-caps líquidos el slippage de market es
-    # 0.01-0.05% por trade, mucho menor que un gap overnight de 1-2 ATRs.
-    parent_id = ib.client.getReqId()
+    # Parent: MarketOrder standalone. Antes era LimitOrder ±0.5% pero podía
+    # quedar pendiente cruzando overnight si no llenaba ese día (gap risk:
+    # ~5% noches con gap > 1 ATR sobre 2y de la canasta). Para mega-caps
+    # líquidos el slippage de market es 0.01-0.05%, mucho menor.
     parent = MarketOrder(action, size)  # type: ignore
-    parent.orderId  = parent_id
-    parent.transmit = False          # no transmitir hasta enviar el hijo
-
-    # Child: TRAIL order — IBKR mueve el stop automáticamente
-    trail = Order()
-    trail.action          = close_action
-    trail.orderType       = 'TRAIL'
-    trail.totalQuantity   = size
-    trail.auxPrice        = float(trail_distance)   # distancia en USD
-    trail.trailStopPrice  = float(stop)             # stop inicial
-    trail.parentId        = parent_id
-    trail.transmit        = True     # dispara parent + child juntos
-
+    parent.transmit = True
     parent_trade = ib.placeOrder(contract, parent)
-    trail_trade  = ib.placeOrder(contract, trail)
-
     log.info(f"  Parent: {action} {size} {ticker} @MARKET")
-    log.info(f"  Trail:  {close_action} {size} {ticker}  trail=${trail_distance:.2f}  "
-             f"stop0=${stop:.2f}")
 
-    # Esperar fill de la parent hasta 30s. Si el bot corre fuera del horario
-    # de mercado (típico: 15:30 ET = 30 min antes del close), la limit puede
-    # quedar pendiente hasta la apertura del día siguiente. En ese caso retornamos
-    # fill_price=None y la entry queda como "pending" hasta el próximo run.
+    # Esperar fill hasta 30s
     fill_price = None
     for _ in range(60):
         ib.sleep(0.5)
@@ -493,12 +503,27 @@ def open_position(ib, ticker, direction, size, entry, stop, trail_distance):
             fill_price = sum(float(f.execution.avgPrice) * float(f.execution.shares)
                              for f in parent_trade.fills) / total
 
+    parent_id = parent_trade.order.orderId
+    trail_id  = None
+
     if fill_price:
         log.info(f"  Fill real parent @ ${fill_price:.4f}")
+        try:
+            trail_id = place_trail_stop(ib, ticker, direction, size, stop, trail_distance)
+        except Exception as e:
+            log.error(f"  ⚠ TRAIL no se pudo colocar tras el fill: {e}")
+            try:
+                notifier.notify(
+                    f"⚠️ <b>{ticker} {direction}</b> filleó pero TRAIL falló: {e}\n"
+                    f"Posición DESPROTEGIDA — cerrá manual o relanzá el bot."
+                )
+            except Exception:
+                pass
     else:
-        log.info(f"  Parent aún pendiente — entry quedará como aprox hasta el próximo run")
+        log.info(f"  Parent pendiente (mercado cerrado) — TRAIL se colocará "
+                 f"al detectar el fill en el próximo run")
 
-    return [parent_trade.order.orderId, trail_trade.order.orderId], fill_price
+    return [parent_id, trail_id], fill_price
 
 
 def get_fill_price(ib, order_id):
@@ -611,10 +636,11 @@ def lock_breakeven_stops(ib, state, prices):
             continue
 
         order_ids = pos.get('order_ids') or []
-        if len(order_ids) < 2:
-            log.warning(f"[{key}] sin orderId de TRAIL guardado, no se puede mover el stop")
+        trail_order_id = order_ids[1] if len(order_ids) >= 2 else None
+        if not trail_order_id:
+            # TRAIL aún no fue colocado (parent pendiente o falla previa).
+            # Skip silencioso: reconcile_pending_entries lo manejará.
             continue
-        trail_order_id = order_ids[1]
         trail_dist     = pos.get('trail_dist')
         if not trail_dist:
             continue
@@ -659,10 +685,14 @@ def reconcile_pending_entries(ib, state):
     """Para cada posición con entry_pending=True, busca el fill real de la
     parent order (`order_ids[0]`) en ib.fills() y actualiza pos['entry'].
 
-    Esto cubre el caso típico: el bot abre una LimitOrder a las 15:30 ET (30
-    min antes del cierre); si no llena ese mismo día, la limit queda activa
-    hasta la apertura del día siguiente, y el entry real se conoce recién en
-    el próximo run.
+    Si la posición no tiene TRAIL (`order_ids[1] is None` — caso típico cuando
+    el bot corrió fuera de horario y la parent quedó queued), placea el TRAIL
+    standalone ahora que la posición ya existe.
+
+    Esto cubre el caso típico: el bot abre a las 15:30 ET; si la parent no
+    llena ese mismo día, la MarketOrder queda activa hasta la apertura del
+    día siguiente. El entry real y el TRAIL se materializan recién en el
+    próximo run del daemon.
     """
     pending = [(k, p) for k, p in state['positions'].items() if p.get('entry_pending')]
     if not pending:
@@ -685,6 +715,35 @@ def reconcile_pending_entries(ib, state):
         pos['entry_pending'] = False
         pos['entry_fill_ts'] = ts.isoformat() if ts else None
         log.info(f"  {key}: entry {old_entry} → {pos['entry']} (fill real, {shares} sh)")
+
+        # Placeamos el TRAIL stop si quedó pendiente (caso típico cuando el
+        # bot abrió fuera de horario y la parent quedó queued sin protección).
+        trail_id = order_ids[1] if len(order_ids) >= 2 else None
+        if trail_id is None:
+            try:
+                new_trail_id = place_trail_stop(
+                    ib, pos['ticker'], pos['dir'], pos['size'],
+                    pos['stop'], pos['trail_dist']
+                )
+                pos['order_ids'] = [parent_id, new_trail_id]
+                log.info(f"  {key}: TRAIL placed (orderId={new_trail_id})")
+                try:
+                    notifier.notify(
+                        f"🛡 <b>{pos['ticker']} [{pos.get('strategy','')}] {pos['dir']}</b>\n"
+                        f"TRAIL stop colocado tras fill (entry ${pos['entry']:.4f})"
+                    )
+                except Exception:
+                    pass
+            except Exception as e:
+                log.error(f"  {key}: ⚠ TRAIL falló — posición SIN STOP: {e}")
+                try:
+                    notifier.notify(
+                        f"⚠️ <b>{pos['ticker']} {pos['dir']}</b> filleó pero TRAIL falló: {e}\n"
+                        f"Posición DESPROTEGIDA — cerrá manual o relanzá el bot."
+                    )
+                except Exception:
+                    pass
+
         try:
             notifier.notify(
                 f"📌 <b>Entry reconciliada</b>  {pos.get('ticker', key)} [{pos.get('strategy','')}]\n"
