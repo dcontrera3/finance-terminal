@@ -1091,6 +1091,30 @@ def run_signals(dry_run=False):
                 log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada (DD stop activo)")
                 continue
 
+            # Filtro de contradicción entre estrategias: si OTRA estrategia ya tiene
+            # una posición ABIERTA en este ticker con dirección opuesta, no abrimos.
+            # Caso real (VIST 2026-05-07): swing SHORT + pullback LONG terminaron
+            # auto-hedgeándose. Análisis 5y/24 tickers: 58% de los solapamientos
+            # swing↔pullback son contradicciones. Política: first-come-first-served,
+            # cuando el trail cierre la primera, la segunda volverá si sigue válida.
+            opposite_dir = 'SHORT' if new_dir == 'LONG' else 'LONG'
+            conflicting = next(
+                (p for p in state['positions'].values()
+                 if p['ticker'] == ticker and p['dir'] == opposite_dir),
+                None,
+            )
+            if conflicting:
+                log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — "
+                         f"ya hay posición {opposite_dir} de [{conflicting['strategy']}]")
+                try:
+                    notifier.notify(
+                        f"⚠️ <b>{ticker} [{strat}] {new_dir}</b> descartada\n"
+                        f"Conflicto con [{conflicting['strategy']}] {opposite_dir} ya abierta"
+                    )
+                except Exception:
+                    pass
+                continue
+
             size, stop, trail_dist = calc_position(equity, price, atr_val, new_dir, strat)
             if size < 1:
                 log.warning(f"[{strat}] {ticker}: tamaño calculado < 1 share, skip")
