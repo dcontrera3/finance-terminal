@@ -47,6 +47,19 @@ import requests as http
 from datetime import datetime, timedelta
 from functools import wraps
 
+# IBKR price stream deshabilitado por default: una segunda conexión a IBKR desde
+# el server roba market data lines al bot y genera error 10197 "sesiones
+# competidoras". Para reactivar (cuando tengamos arquitectura unificada):
+#   export IBKR_PRICES_ENABLED=true
+ibkr_stream = None
+if os.environ.get('IBKR_PRICES_ENABLED', 'false').lower() == 'true':
+    try:
+        from ibkr_prices import stream as ibkr_stream
+        ibkr_stream.start()
+    except Exception as _e:
+        print(f"[server] ibkr_prices no disponible: {_e}", flush=True)
+        ibkr_stream = None
+
 app = Flask(__name__)
 CORS(app)
 
@@ -244,8 +257,23 @@ def quote(ticker):
 @limiter.limit("120 per minute")
 @require_auth
 def price(ticker):
-    """Precio real-time vía fast_info. Cache 15s. Incluye sparkline (7 cierres, cache 1h)."""
-    cache_key = f"price:{ticker.upper()}"
+    """Precio real-time. Prioriza IBKR si está conectado; fallback a yfinance. Cache 15s."""
+    ticker_u = ticker.upper()
+
+    # IBKR real-time primero. El stream devuelve solo si hay dato fresco (<60s).
+    if ibkr_stream:
+        ib_data = ibkr_stream.get_prices([ticker_u]).get(ticker_u)
+        if ib_data:
+            result = {
+                "ticker": ticker_u,
+                "current_price": ib_data['price'],
+                "change_pct": ib_data['change_pct'],
+                "spark": _get_sparkline(ticker),
+                "source": "ibkr",
+            }
+            return jsonify(result)
+
+    cache_key = f"price:{ticker_u}"
     cached = _cache_get(cache_key)
     if cached:
         return jsonify(cached)
@@ -254,12 +282,36 @@ def price(ticker):
         cur        = clean(fi.get('lastPrice') or fi.get('regularMarketPrice'))
         prev_close = clean(fi.get('previousClose') or fi.get('regularMarketPreviousClose'))
         chg        = round((cur - prev_close) / prev_close * 100, 2) if cur and prev_close else 0
-        result     = {"ticker": ticker.upper(), "current_price": cur, "change_pct": chg,
-                      "spark": _get_sparkline(ticker)}
+        result     = {"ticker": ticker_u, "current_price": cur, "change_pct": chg,
+                      "spark": _get_sparkline(ticker), "source": "yfinance"}
         _cache_set(cache_key, result, ttl_seconds=15)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/prices_ibkr")
+@limiter.limit("120 per minute")
+@require_auth
+def prices_ibkr():
+    """Batch de precios desde IBKR. Devuelve solo los que tienen dato fresco.
+    Query: ?tickers=NVDA,SPY,QQQ"""
+    tickers_raw = request.args.get('tickers', '').strip()
+    if not tickers_raw:
+        return jsonify({"prices": {}, "connected": False})
+    tickers = [t.strip().upper() for t in tickers_raw.split(',') if t.strip()]
+    if not ibkr_stream or not ibkr_stream.connected:
+        return jsonify({"prices": {}, "connected": False})
+    prices = ibkr_stream.get_prices(tickers)
+    return jsonify({"prices": prices, "connected": True, "source": "ibkr"})
+
+
+@app.route("/ibkr/status")
+@require_auth
+def ibkr_status():
+    if not ibkr_stream:
+        return jsonify({"available": False, "connected": False})
+    return jsonify(ibkr_stream.status())
 
 @app.route("/news/<ticker>")
 @limiter.limit("20 per minute")

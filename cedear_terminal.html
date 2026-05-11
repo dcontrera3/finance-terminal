@@ -100,6 +100,15 @@ body{background:var(--bg0);color:var(--text);font-family:var(--font-sans);
 .live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);
   box-shadow:0 0 8px rgba(34,197,94,0.6);}
 .live-dot.offline{background:var(--red);box-shadow:0 0 8px rgba(239,68,68,0.5);}
+.live-badge{font-family:var(--font-mono);font-size:.55rem;font-weight:700;letter-spacing:.8px;
+  padding:2px 6px;border-radius:3px;border:1px solid transparent;cursor:default;user-select:none;}
+.live-badge.live{color:var(--green);border-color:rgba(34,197,94,0.4);background:rgba(34,197,94,0.08);
+  animation:livePulse 2s ease-in-out infinite;}
+.live-badge.delayed{color:var(--muted);border-color:var(--border);background:transparent;}
+@keyframes livePulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,0);}
+  50%{box-shadow:0 0 6px 0 rgba(34,197,94,0.35);}
+}
 .tf-btn{padding:6px 11px;border-radius:var(--radius-sm);cursor:pointer;font-size:.7rem;font-weight:600;
   font-family:var(--font-sans);background:transparent;color:var(--muted);
   transition:all .15s;letter-spacing:.2px;border:1px solid transparent;}
@@ -851,6 +860,7 @@ canvas{display:block;}
       <div class="tf-btn" data-tf="3M">3M</div>
     </div>
     <div class="live-dot" id="liveDot"></div>
+    <span class="live-badge delayed" id="liveIndicator" title="Estado del stream de precios">DELAYED</span>
     <span style="font-size:.6rem;color:var(--muted);font-family:var(--font-mono)" id="clock"></span>
     <button id="refreshBtn" onclick="manualRefresh()" class="tf-btn" style="padding:4px 9px" title="Actualizar precios">↻</button>
     <button class="alert-btn" id="alertBtn" onclick="openAlerts()">🔔 ALERTAS<span class="alert-badge" id="alertBadge" style="display:none">0</span></button>
@@ -2287,6 +2297,21 @@ async function fetchPrice(ticker) {
   return r.json();
 }
 
+// Estado del stream IBKR. true = precios live, false = delayed yfinance.
+let ibkrLive = false;
+
+async function fetchIBKRBatch(tickers) {
+  if (!tickers.length) return { prices: {}, connected: false };
+  const qs = encodeURIComponent(tickers.join(','));
+  try {
+    const r = await fetch(`${API}/prices_ibkr?tickers=${qs}`);
+    if (!r.ok) return { prices: {}, connected: false };
+    return r.json();
+  } catch {
+    return { prices: {}, connected: false };
+  }
+}
+
 async function loadAllPrices() {
   if (!await checkServer()) return;
   const set = new Set([
@@ -2296,16 +2321,51 @@ async function loadAllPrices() {
   ]);
   if (currentTicker) set.add(currentTicker);
   const allTickers = [...set];
-  const results = await Promise.allSettled(allTickers.map(t => fetchPrice(t)));
-  results.forEach((res, i) => {
-    if (res.status === 'fulfilled') {
-      const d = res.value;
-      priceCache[allTickers[i]] = { price: d.current_price, chg: d.change_pct, spark: d.spark || [] };
-    }
-  });
+
+  // 1) Intentar batch de IBKR. Devuelve solo tickers con dato fresco.
+  const ibkrBatch = await fetchIBKRBatch(allTickers);
+  ibkrLive = !!ibkrBatch.connected;
+  updateLiveIndicator();
+  const ibkrPrices = ibkrBatch.prices || {};
+  for (const t of allTickers) {
+    const d = ibkrPrices[t];
+    if (!d) continue;
+    const prev = priceCache[t] || {};
+    priceCache[t] = { price: d.price, chg: d.change_pct, spark: prev.spark || [], source: 'ibkr' };
+  }
+
+  // 2) Para los que IBKR no cubrió, fallback a yfinance via /price/<t>
+  const missing = allTickers.filter(t => !ibkrPrices[t]);
+  if (missing.length) {
+    const results = await Promise.allSettled(missing.map(t => fetchPrice(t)));
+    results.forEach((res, i) => {
+      if (res.status === 'fulfilled') {
+        const d = res.value;
+        priceCache[missing[i]] = {
+          price: d.current_price, chg: d.change_pct, spark: d.spark || [],
+          source: d.source || 'yfinance',
+        };
+      }
+    });
+  }
+
   savePriceCache();
   checkAlerts();
   renderSidebar(); renderDashboard(); renderTabs(); updateActive(); renderWatchlist();
+}
+
+function updateLiveIndicator() {
+  const el = document.getElementById('liveIndicator');
+  if (!el) return;
+  if (ibkrLive) {
+    el.textContent = 'IBKR LIVE';
+    el.className = 'live-badge live';
+    el.title = 'Precios en tiempo real vía IBKR';
+  } else {
+    el.textContent = 'DELAYED';
+    el.className = 'live-badge delayed';
+    el.title = 'IBKR Gateway no conectado. Usando Yahoo Finance (delay ~15 min).';
+  }
 }
 
 // Refresco de precios 24h cada 15s
@@ -2989,15 +3049,23 @@ function renderBotKpis() {
   const dd  = s.drawdown_pct;
   const peak = s.peak_equity || 0;
 
-  document.getElementById('kpiEquity').textContent = s.current_equity != null ? '$' + fmtN(s.current_equity) : '—';
+  document.getElementById('kpiEquity').textContent = s.current_equity != null
+    ? '$' + s.current_equity.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    : '—';
   const ddEl = document.getElementById('kpiDd');
   ddEl.textContent = dd != null ? `DD ${dd.toFixed(2)}%` : 'DD —';
   ddEl.style.color = dd != null && dd < 0 ? 'var(--red)' : 'var(--muted)';
 
   const pnlEl = document.getElementById('kpiPnl');
-  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + fmtN(pnl);
+  // % sobre capital base (current_equity descontando el pnl acumulado de cierres).
+  // No es perfecto si el equity arrancó distinto, pero es la mejor aproximación
+  // sin un campo `initial_equity` en el state.
+  const baseCap = (s.current_equity || 0) - pnl;
+  const pnlPct  = baseCap > 0 ? (pnl / baseCap * 100) : 0;
+  pnlEl.textContent = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
   pnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text)';
-  document.getElementById('kpiTrades').textContent = `${mm.trades} trades`;
+  document.getElementById('kpiTrades').textContent =
+    `${pnl >= 0 ? '+' : ''}$${fmtN(pnl)} · ${mm.trades} trades`;
 
   const wrEl = document.getElementById('kpiWr');
   wrEl.textContent = wr.toFixed(1) + '%';
