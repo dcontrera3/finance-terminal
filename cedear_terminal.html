@@ -2352,6 +2352,10 @@ async function loadAllPrices() {
   savePriceCache();
   checkAlerts();
   renderSidebar(); renderDashboard(); renderTabs(); updateActive(); renderWatchlist();
+  // Si ya tenemos un snapshot del bot, refrescamos los KPIs para que el
+  // equity live (mark-to-market) se actualice con los precios nuevos
+  // sin esperar al próximo /bot/state.
+  if (botSnapshot) renderBotKpis();
 }
 
 function updateLiveIndicator() {
@@ -3046,15 +3050,51 @@ function renderBotKpis() {
   const mm = m || { pnl: 0, trades: 0, win_rate: 0, wins: 0, losses: 0 };
   const pnl = mm.pnl || 0;
   const wr  = mm.win_rate || 0;
-  const dd  = s.drawdown_pct;
   const peak = s.peak_equity || 0;
 
-  document.getElementById('kpiEquity').textContent = s.current_equity != null
-    ? '$' + s.current_equity.toLocaleString('en-US', { maximumFractionDigits: 0 })
-    : '—';
+  // Mark-to-market en vivo: el bot escribe current_equity solo cuando corre
+  // (1x/día post-cierre). Entre runs, sumamos el PnL no realizado de las
+  // posiciones abiertas usando los precios live del priceCache.
+  const positions = s.positions || {};
+  let openPnl = 0;
+  let pricesCovered = 0;
+  let totalPositions = 0;
+  for (const key in positions) {
+    const p = positions[key];
+    totalPositions++;
+    const cached = priceCache[p.ticker];
+    if (!cached || !isFinite(cached.price)) continue;
+    const sign = p.dir === 'LONG' ? 1 : -1;
+    openPnl += (cached.price - p.entry) * p.size * sign;
+    pricesCovered++;
+  }
+  const baseEquity = s.current_equity || 0;
+  const liveEquity = baseEquity + openPnl;
+  const livePeak   = Math.max(peak, liveEquity);
+  const liveDd     = livePeak > 0 && s.current_equity != null
+                      ? (liveEquity - livePeak) / livePeak * 100 : null;
+
+  const kpiEquityEl = document.getElementById('kpiEquity');
+  if (s.current_equity != null) {
+    kpiEquityEl.textContent = '$' + Math.round(liveEquity).toLocaleString('en-US');
+    const lastRunFmt = s.last_run
+      ? new Date(s.last_run).toLocaleString('es-AR',
+          { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : '—';
+    const openPnlStr = (openPnl >= 0 ? '+' : '−')
+      + '$' + Math.abs(Math.round(openPnl)).toLocaleString('en-US');
+    kpiEquityEl.title =
+      `Snapshot bot: $${Math.round(baseEquity).toLocaleString('en-US')} (${lastRunFmt})\n` +
+      `Open P&L (${pricesCovered}/${totalPositions} precios live): ${openPnlStr}\n` +
+      `Live: $${Math.round(liveEquity).toLocaleString('en-US')}`;
+  } else {
+    kpiEquityEl.textContent = '—';
+    kpiEquityEl.title = '';
+  }
+
   const ddEl = document.getElementById('kpiDd');
-  ddEl.textContent = dd != null ? `DD ${dd.toFixed(2)}%` : 'DD —';
-  ddEl.style.color = dd != null && dd < 0 ? 'var(--red)' : 'var(--muted)';
+  ddEl.textContent = liveDd != null ? `DD ${liveDd.toFixed(2)}%` : 'DD —';
+  ddEl.style.color = liveDd != null && liveDd < 0 ? 'var(--red)' : 'var(--muted)';
 
   const pnlEl = document.getElementById('kpiPnl');
   // % sobre capital base (current_equity descontando el pnl acumulado de cierres).
