@@ -160,7 +160,8 @@ def generate_signals_breakout(df, vol_spike=1.3, rsi_max=75, periods=20):
 
 
 def generate_signals_swing(df, periods=10, vol_spike=1.2, adx_min=18,
-                           rsi_long_max=70, rsi_short_min=30):
+                           rsi_long_max=70, rsi_short_min=30,
+                           adx_relax_threshold=999, rsi_relax_max=100, rsi_relax_min=0):
     """
     SWING: breakout de N días en timeframe diario. Ambas direcciones.
       LONG  (+1): precio rompe máximo de N días + volumen elevado + ADX confirma
@@ -169,6 +170,11 @@ def generate_signals_swing(df, periods=10, vol_spike=1.2, adx_min=18,
                   + RSI no sobrevendido
     Genera 15-40 señales/año por ticker (3-5x más que EMA cross).
     Funciona en acciones de alta liquidez + índices + commodities.
+
+    Fase 2.4 (opt-in): filtro RSI condicional al ADX. Si adx > adx_relax_threshold,
+    el rango de RSI permitido se ensancha a [rsi_relax_min, rsi_relax_max].
+    Hipótesis: en tendencias ultra fuertes (ADX alto), RSI extremo no es "tarde",
+    es momentum confirmado. Defaults son no-op (threshold=999 nunca se cumple).
     """
     c = df['Close']
     h = df['High']
@@ -182,9 +188,14 @@ def generate_signals_swing(df, periods=10, vol_spike=1.2, adx_min=18,
     vol_ok        = df['vol_ratio'] > vol_spike
     trend_ok      = df['adx'] > adx_min
 
+    # Filtro RSI: rango normal salvo que adx supere el relax_threshold
+    high_adx = df['adx'] > adx_relax_threshold
+    rsi_long_ok  = ((df['rsi'] < rsi_long_max)  & ~high_adx) | ((df['rsi'] < rsi_relax_max) & high_adx)
+    rsi_short_ok = ((df['rsi'] > rsi_short_min) & ~high_adx) | ((df['rsi'] > rsi_relax_min) & high_adx)
+
     df['signal'] = 0
-    df.loc[breakout_up   & vol_ok & trend_ok & (df['rsi'] < rsi_long_max),  'signal'] =  1
-    df.loc[breakout_down & vol_ok & trend_ok & (df['rsi'] > rsi_short_min), 'signal'] = -1
+    df.loc[breakout_up   & vol_ok & trend_ok & rsi_long_ok,  'signal'] =  1
+    df.loc[breakout_down & vol_ok & trend_ok & rsi_short_ok, 'signal'] = -1
     return df
 
 
