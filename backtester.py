@@ -120,6 +120,10 @@ def add_indicators(df):
     df['bb_upper'], df['bb_mid'], df['bb_lower'] = bollinger(c)
     df['vol_ma']    = v.rolling(20).mean()
     df['vol_ratio'] = v / df['vol_ma']
+    # Volatilidad anualizada de retornos (Fase 2.1 vol-targeting).
+    # Se calcula sobre data diaria; en timeframes mayores el caller ignora.
+    daily_ret = c.pct_change()
+    df['vol_20d'] = daily_ret.rolling(20).std() * (252 ** 0.5)
     return df
 
 
@@ -279,7 +283,8 @@ def backtest(ticker, start='2020-01-01', end=None,
              trailing_atr=None,
              dd_pause_threshold=None,
              vix_df=None,
-             vix_pause_above=None):
+             vix_pause_above=None,
+             vol_target=None):
     """
     Parámetros de la Fase 1:
       trailing_atr:        distancia del trailing stop en ATRs (ej 2.0).
@@ -407,6 +412,18 @@ def backtest(ticker, start='2020-01-01', end=None,
                 target = entry - stop_dist * rr_ratio
 
             risk_usd = capital * risk_per_trade
+            # Vol-targeting opcional (Fase 2.1). Solo aplica si vol_target está seteado
+            # y la barra de la SEÑAL (prev) tiene vol_20d válido. Cap 0.3x-2x.
+            if vol_target is not None and timeframe == '1d':
+                vol_v = prev.get('vol_20d') if hasattr(prev, 'get') else None
+                if vol_v is None:
+                    try:
+                        vol_v = prev['vol_20d']
+                    except (KeyError, IndexError):
+                        vol_v = None
+                if vol_v is not None and pd.notna(vol_v) and vol_v > 0:
+                    vol_mult = min(2.0, max(0.3, vol_target / vol_v))
+                    risk_usd *= vol_mult
             size     = risk_usd / stop_dist
             max_size = (capital * 0.25) / entry
             size     = min(size, max_size)
