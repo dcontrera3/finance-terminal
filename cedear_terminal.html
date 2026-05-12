@@ -518,8 +518,13 @@ canvas{display:block;}
   color:var(--text);font-family:var(--font-sans);font-size:.68rem;font-weight:500;outline:none;}
 .bh-trade{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:8px;overflow:hidden;transition:border-color .15s;}
 .bh-trade:hover{border-color:rgba(139,92,246,0.25);}
-.bh-trade-head{display:grid;grid-template-columns:70px 90px 60px 80px 80px 1fr 80px auto;gap:10px;align-items:center;
+.bh-trade-head{display:grid;grid-template-columns:70px 92px 90px 56px 1fr 1fr 46px 110px auto;gap:10px;align-items:center;
   padding:11px 14px;cursor:pointer;font-size:.7rem;}
+.bh-trade-head .bh-days{font-family:var(--font-mono);font-size:.66rem;color:var(--muted);text-align:center;}
+.bh-trade-head .bh-open-tag{font-size:.54rem;font-weight:700;letter-spacing:.3px;padding:3px 7px;border-radius:4px;
+  background:rgba(34,197,94,0.12);color:var(--green);border:1px solid rgba(34,197,94,0.3);text-align:center;text-transform:uppercase;}
+.bh-pnl-stack{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;}
+.bh-pnl-pct{font-size:.6rem;opacity:.75;font-weight:600;}
 .bh-trade-head:hover{background:var(--accent-soft);}
 .bh-sym{font-family:var(--font-display);font-weight:700;color:var(--accent-2);font-size:.82rem;letter-spacing:.1px;}
 .bh-date{color:var(--muted);font-family:var(--font-mono);font-size:.64rem;}
@@ -828,7 +833,7 @@ canvas{display:block;}
 <div class="sim-overlay" id="botHistoryOverlay" onclick="if(event.target===this)closeBotHistory()">
   <div class="sim-modal" style="width:1080px">
     <div class="sim-head">
-      <div class="sim-title">🤖 Historial del Bot</div>
+      <div class="sim-title">📜 Historial del Bot</div>
       <div class="sim-close" onclick="closeBotHistory()">✕</div>
     </div>
     <div class="sim-body" id="botHistoryBody">
@@ -928,7 +933,7 @@ canvas{display:block;}
     <span style="font-size:.6rem;color:var(--muted);font-family:var(--font-mono)" id="clock"></span>
     <button id="refreshBtn" onclick="manualRefresh()" class="tf-btn" style="padding:4px 9px" title="Actualizar precios">↻</button>
     <button class="alert-btn" id="alertBtn" onclick="openAlerts()">🔔 ALERTAS<span class="alert-badge" id="alertBadge" style="display:none">0</span></button>
-    <div class="sim-btn" onclick="openBotHistory()" title="Historial del bot">🤖 BOT</div>
+    <div class="sim-btn" onclick="openBotHistory()" title="Historial del bot">📜 HISTORIAL</div>
     <div class="sim-btn" onclick="openSim()">⚡ SIM</div>
     <button class="logout-btn" id="logoutBtn" onclick="doLogout()" style="display:none" title="Cerrar sesión">SALIR</button>
   </div>
@@ -3837,7 +3842,7 @@ function closeSim() {
 // BOT HISTORY
 // ══════════════════════════════════════════
 
-let botHistoryFilter = { kind: 'all', ticker: 'all', strategy: 'all' };
+let botHistoryFilter = { status: 'all', ticker: 'all', strategy: 'all' };
 
 async function openBotHistory() {
   document.getElementById('botHistoryOverlay').classList.add('open');
@@ -3857,6 +3862,79 @@ function setBotHistoryFilter(kind, value) {
 function getBotTradesForTicker(ticker) {
   const hist = botSnapshot?.history || [];
   return hist.filter(h => h.ticker === ticker);
+}
+
+// Empareja eventos open/close del history en trades completos. Posiciones
+// abiertas (open sin close matcheante) se incluyen al final con status='open'.
+function _pairTrades(history) {
+  const sorted = [...history].sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+  const openByKey = new Map();   // key = ticker__strategy
+  const trades = [];
+
+  for (const ev of sorted) {
+    const key = `${ev.ticker}__${ev.strategy || '?'}`;
+    if (ev.event === 'open') {
+      // Si hay otro open previo sin cerrar para esta key, lo descartamos (raro pero defensivo)
+      openByKey.set(key, ev);
+    } else if (ev.event === 'close') {
+      const openEv = openByKey.get(key);
+      if (openEv) {
+        trades.push({
+          ticker:     ev.ticker,
+          strategy:   ev.strategy,
+          dir:        openEv.dir,
+          entry:      openEv.entry || openEv.price,
+          exit:       ev.price,
+          size:       openEv.size || ev.size,
+          pnl:        ev.pnl,
+          openTs:     openEv.ts,
+          closeTs:    ev.ts,
+          stop:       openEv.stop,
+          indicators: openEv.indicators,
+          status:     'closed',
+        });
+        openByKey.delete(key);
+      } else {
+        // Close huérfano: ocurre si el bot sincronizó con IBKR y el open quedó antes del history retenido
+        trades.push({
+          ticker:   ev.ticker,
+          strategy: ev.strategy,
+          dir:      ev.dir,
+          entry:    ev.entry || null,
+          exit:     ev.price,
+          size:     ev.size,
+          pnl:      ev.pnl,
+          openTs:   null,
+          closeTs:  ev.ts,
+          status:   'closed',
+          orphan:   true,
+        });
+      }
+    }
+  }
+
+  // Opens sin close: posiciones abiertas. Cruzar con state.positions para los datos canónicos.
+  const openPositions = (botSnapshot && botSnapshot.positions) || {};
+  for (const [key, openEv] of openByKey) {
+    const posKey = key;
+    const livePos = openPositions[posKey];
+    trades.push({
+      ticker:     openEv.ticker,
+      strategy:   openEv.strategy,
+      dir:        openEv.dir,
+      entry:      (livePos && livePos.entry) || openEv.entry || openEv.price,
+      exit:       null,
+      size:       (livePos && livePos.size) || openEv.size,
+      pnl:        null,
+      openTs:     openEv.ts,
+      closeTs:    null,
+      stop:       (livePos && livePos.stop) || openEv.stop,
+      indicators: openEv.indicators,
+      status:     'open',
+    });
+  }
+
+  return trades.sort((a, b) => (b.openTs || b.closeTs || '').localeCompare(a.openTs || a.closeTs || ''));
 }
 
 function _signalContext(ind, dir) {
@@ -3915,38 +3993,72 @@ function renderBotHistory() {
     body.innerHTML = `<div class="bh-empty">No hay data del bot disponible.</div>`;
     return;
   }
-  const hist = [...(botSnapshot.history || [])].reverse();
-  const tickers = Array.from(new Set(hist.map(h => h.ticker))).sort();
-  const strats  = Array.from(new Set(hist.map(h => h.strategy).filter(Boolean))).sort();
 
-  // Stats
-  const closes = hist.filter(h => h.event === 'close' && h.pnl != null);
-  const wins   = closes.filter(h => h.pnl > 0);
-  const totalPnl = closes.reduce((a, h) => a + h.pnl, 0);
-  const opens  = hist.filter(h => h.event === 'open');
-  const winRate = closes.length ? (wins.length / closes.length * 100).toFixed(1) : '—';
+  const hist   = botSnapshot.history || [];
+  const trades = _pairTrades(hist);
 
-  // Filter
-  const filtered = hist.filter(h => {
-    if (botHistoryFilter.kind !== 'all' && h.event !== botHistoryFilter.kind) return false;
-    if (botHistoryFilter.ticker !== 'all' && h.ticker !== botHistoryFilter.ticker) return false;
-    if (botHistoryFilter.strategy !== 'all' && h.strategy !== botHistoryFilter.strategy) return false;
+  // Para posiciones abiertas, calcular PnL no realizado con priceCache
+  trades.forEach(tr => {
+    if (tr.status !== 'open' || !tr.entry || !tr.size) return;
+    const px = priceCache[tr.ticker]?.price;
+    if (px == null || !isFinite(px)) return;
+    const sign = tr.dir === 'LONG' ? 1 : -1;
+    tr._unrealizedPnl = (px - tr.entry) * tr.size * sign;
+    tr._lastPrice = px;
+  });
+
+  const tickers = Array.from(new Set(trades.map(t => t.ticker))).sort();
+  const strats  = Array.from(new Set(trades.map(t => t.strategy).filter(Boolean))).sort();
+
+  // Stats agregadas sobre trades cerrados
+  const closed = trades.filter(t => t.status === 'closed' && t.pnl != null);
+  const wins   = closed.filter(t => t.pnl > 0);
+  const totalPnl = closed.reduce((a, t) => a + t.pnl, 0);
+  const winRate  = closed.length ? (wins.length / closed.length * 100).toFixed(1) : '—';
+  const openTrades = trades.filter(t => t.status === 'open');
+
+  // Filtros
+  const filtered = trades.filter(t => {
+    if (botHistoryFilter.status === 'open'   && t.status !== 'open') return false;
+    if (botHistoryFilter.status === 'closed' && t.status !== 'closed') return false;
+    if (botHistoryFilter.ticker !== 'all'   && t.ticker !== botHistoryFilter.ticker) return false;
+    if (botHistoryFilter.strategy !== 'all' && t.strategy !== botHistoryFilter.strategy) return false;
     return true;
   });
 
-  const rows = filtered.map((ev, i) => {
-    const date = ev.ts ? ev.ts.replace('T', ' ').slice(0, 16) : '—';
-    const dirCls = ev.dir === 'LONG' ? 'long' : ev.dir === 'SHORT' ? 'short' : '';
-    const evCls = ev.event === 'open' ? 'open' : 'close';
-    const evLabel = ev.event === 'open' ? '▲ ENTRADA' : '▼ SALIDA';
-    const stratCls = ev.strategy || '';
-    const pnlCls = ev.pnl == null ? '' : ev.pnl >= 0 ? 'pos' : 'neg';
-    const pnlTxt = ev.pnl == null ? '—' : `${ev.pnl >= 0 ? '+' : ''}$${ev.pnl.toFixed(2)}`;
+  const rows = filtered.map((tr, i) => {
+    const openDate  = tr.openTs  ? tr.openTs.slice(0, 10)  : '—';
+    const closeDate = tr.closeTs ? tr.closeTs.slice(0, 10) : null;
+    const dirCls    = tr.dir === 'LONG' ? 'long' : tr.dir === 'SHORT' ? 'short' : '';
+    const stratCls  = tr.strategy || '';
 
-    const ind = ev.indicators;
-    const ctx = _signalContext(ind, ev.dir);
-    const narrative = _buildNarrative(ev);
+    // Días de duración
+    let days = '—';
+    if (tr.openTs) {
+      const endTs = tr.closeTs ? new Date(tr.closeTs).getTime() : Date.now();
+      const d = Math.max(0, Math.floor((endTs - new Date(tr.openTs).getTime()) / 86400000));
+      days = `${d}d`;
+    }
 
+    // PnL: realizado si cerrada, no realizado si abierta con precio live
+    const pnlEffective = tr.status === 'closed' ? tr.pnl : tr._unrealizedPnl;
+    const notional = (tr.entry || 0) * (tr.size || 0);
+    const pnlPct   = (pnlEffective != null && notional > 0) ? (pnlEffective / notional * 100) : null;
+    const pnlCls   = pnlEffective == null ? '' : pnlEffective >= 0 ? 'pos' : 'neg';
+    const pnlTxt   = pnlEffective == null ? '—'
+                      : `${pnlEffective >= 0 ? '+' : '−'}$${Math.abs(Math.round(pnlEffective)).toLocaleString('en-US')}`;
+    const pnlPctTxt = pnlPct == null ? '' : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+
+    const entryStr = tr.entry != null ? `$${tr.entry.toFixed(2)}` : '—';
+    const exitStr  = tr.exit  != null ? `$${tr.exit.toFixed(2)}`  : (tr._lastPrice != null ? `$${tr._lastPrice.toFixed(2)} live` : '—');
+    const sizeStr  = tr.size != null ? `× ${tr.size.toLocaleString('en-US')}` : '';
+
+    const statusTag = tr.status === 'open'
+      ? `<span class="bh-open-tag">ABIERTA</span>`
+      : `<span class="bh-evt close">▼ CERRADA</span>`;
+
+    // Detalle expandible
+    const ind = tr.indicators;
     const indGrid = ind ? `
       <div class="bh-detail-grid">
         ${ind.rsi != null ? `<div class="bh-ind"><div class="bh-ind-l">RSI</div><div class="bh-ind-v">${ind.rsi}</div></div>` : ''}
@@ -3959,40 +4071,73 @@ function renderBotHistory() {
         ${ind.volume != null ? `<div class="bh-ind"><div class="bh-ind-l">Volumen</div><div class="bh-ind-v">${(ind.volume/1e6).toFixed(2)}M</div></div>` : ''}
       </div>` : '';
 
+    const narrative = _buildNarrative({
+      dir: tr.dir, strategy: tr.strategy, price: tr.entry, indicators: ind,
+    });
+
+    const closedInfo = tr.status === 'closed' && tr.closeTs
+      ? `Cerrada el ${tr.closeTs.slice(0,10)} a ${exitStr.replace(' live','')}.`
+      : `Posición abierta. Precio actual ${exitStr}.`;
+
     return `
       <div class="bh-trade" id="bh-row-${i}">
         <div class="bh-trade-head" onclick="document.getElementById('bh-row-${i}').classList.toggle('open-row')">
-          <div class="bh-sym">${ev.ticker}</div>
-          <div class="bh-date">${date}</div>
-          <div><span class="bh-evt ${evCls}">${evLabel}</span></div>
-          <div class="bh-dir ${dirCls}">${ev.dir || '—'}</div>
-          <div><span class="bh-strat ${stratCls}">${ev.strategy || '—'}</span></div>
-          <div class="bh-price">$${(ev.price || 0).toFixed(2)}${ev.size ? ` × ${ev.size}` : ''}</div>
-          <div class="bh-pnl ${pnlCls}">${pnlTxt}</div>
+          <div class="bh-sym">${tr.ticker}</div>
+          <div class="bh-date">${openDate}${closeDate ? ' → ' + closeDate.slice(5) : ''}</div>
+          <div>${statusTag}</div>
+          <div class="bh-dir ${dirCls}">${tr.dir || '—'}</div>
+          <div class="bh-price">${entryStr} <span style="color:var(--muted);font-size:.62rem">${sizeStr}</span></div>
+          <div class="bh-price" style="color:var(--muted)">→ ${exitStr}</div>
+          <div class="bh-days">${days}</div>
+          <div class="bh-pnl ${pnlCls}">
+            <div class="bh-pnl-stack">
+              <span>${pnlTxt}</span>
+              ${pnlPctTxt ? `<span class="bh-pnl-pct">${pnlPctTxt}</span>` : ''}
+            </div>
+          </div>
           <div class="bh-actions">
-            <button class="bh-action-btn" onclick="event.stopPropagation();jumpToTradeOnChart('${ev.ticker}')">VER</button>
+            <button class="bh-action-btn" onclick="event.stopPropagation();jumpToTradeOnChart('${tr.ticker}')">VER</button>
             <span class="bh-chevron">▸</span>
           </div>
         </div>
         <div class="bh-detail">
-          <div class="bh-narrative">${narrative}</div>
+          <div class="bh-narrative">${narrative} <span style="color:var(--muted)">${closedInfo}</span></div>
           ${indGrid}
-          ${ev.stop ? `<div style="font-size:.62rem;color:var(--muted);margin-top:6px;font-family:var(--font-mono)">Stop inicial: $${ev.stop}</div>` : ''}
+          <div style="display:flex;gap:14px;font-size:.62rem;color:var(--muted);margin-top:8px;font-family:var(--font-mono);flex-wrap:wrap">
+            ${tr.strategy ? `<span>Estrategia: <strong style="color:var(--text)">${tr.strategy}</strong></span>` : ''}
+            ${tr.stop ? `<span>Stop inicial: <strong style="color:var(--text)">$${tr.stop}</strong></span>` : ''}
+            ${tr.size && tr.entry ? `<span>Notional entry: <strong style="color:var(--text)">$${(tr.size*tr.entry).toLocaleString('en-US',{maximumFractionDigits:0})}</strong></span>` : ''}
+            ${tr.openTs && tr.closeTs ? `<span>Duración: <strong style="color:var(--text)">${days}</strong> (${tr.openTs.slice(0,10)} → ${tr.closeTs.slice(0,10)})</span>` : ''}
+          </div>
         </div>
       </div>`;
   }).join('');
 
+  // Header de columnas
+  const colHeader = `
+    <div class="bh-trade-head" style="background:var(--bg2);border:1px dashed var(--border);border-radius:var(--radius-sm);cursor:default;padding:8px 14px;margin-bottom:6px;font-size:.56rem;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);font-weight:700">
+      <div>Ticker</div>
+      <div>Apertura</div>
+      <div>Estado</div>
+      <div>Dir</div>
+      <div>Entry × Size</div>
+      <div>Exit</div>
+      <div style="text-align:center">Días</div>
+      <div style="text-align:right">P&amp;L</div>
+      <div></div>
+    </div>`;
+
   body.innerHTML = `
     <div class="bh-summary">
-      <div class="bh-stat"><div class="bh-stat-l">Total eventos</div><div class="bh-stat-v">${hist.length}</div></div>
-      <div class="bh-stat"><div class="bh-stat-l">Aperturas</div><div class="bh-stat-v" style="color:var(--accent-2)">${opens.length}</div></div>
-      <div class="bh-stat"><div class="bh-stat-l">Win rate</div><div class="bh-stat-v">${winRate}${closes.length?'%':''}</div></div>
-      <div class="bh-stat"><div class="bh-stat-l">P&L acumulado</div><div class="bh-stat-v" style="color:${totalPnl>=0?'var(--green)':'var(--red)'}">${totalPnl>=0?'+':''}$${totalPnl.toFixed(2)}</div></div>
+      <div class="bh-stat"><div class="bh-stat-l">Trades</div><div class="bh-stat-v">${closed.length}<span style="font-size:.7rem;color:var(--muted);font-weight:500"> · ${openTrades.length} abiertas</span></div></div>
+      <div class="bh-stat"><div class="bh-stat-l">Win rate</div><div class="bh-stat-v">${winRate}${closed.length?'%':''}</div></div>
+      <div class="bh-stat"><div class="bh-stat-l">P&L realizado</div><div class="bh-stat-v" style="color:${totalPnl>=0?'var(--green)':'var(--red)'}">${totalPnl>=0?'+':'−'}$${Math.abs(totalPnl).toLocaleString('en-US',{maximumFractionDigits:0})}</div></div>
+      <div class="bh-stat"><div class="bh-stat-l">Avg PnL/trade</div><div class="bh-stat-v" style="color:${closed.length && totalPnl/closed.length >= 0?'var(--green)':'var(--red)'}">${closed.length ? (totalPnl/closed.length >= 0 ? '+':'−') + '$' + Math.abs(totalPnl/closed.length).toLocaleString('en-US',{maximumFractionDigits:0}) : '—'}</div></div>
     </div>
     <div class="bh-filters">
-      <button class="bh-filter-btn ${botHistoryFilter.kind==='all'?'active':''}" onclick="setBotHistoryFilter('kind','all')">Todos</button>
-      <button class="bh-filter-btn ${botHistoryFilter.kind==='open'?'active':''}" onclick="setBotHistoryFilter('kind','open')">Entradas</button>
-      <button class="bh-filter-btn ${botHistoryFilter.kind==='close'?'active':''}" onclick="setBotHistoryFilter('kind','close')">Salidas</button>
+      <button class="bh-filter-btn ${botHistoryFilter.status==='all'?'active':''}" onclick="setBotHistoryFilter('status','all')">Todos</button>
+      <button class="bh-filter-btn ${botHistoryFilter.status==='open'?'active':''}" onclick="setBotHistoryFilter('status','open')">Abiertas</button>
+      <button class="bh-filter-btn ${botHistoryFilter.status==='closed'?'active':''}" onclick="setBotHistoryFilter('status','closed')">Cerradas</button>
       <select class="bh-filter-sel" onchange="setBotHistoryFilter('ticker',this.value)">
         <option value="all">Todos los tickers</option>
         ${tickers.map(t => `<option value="${t}" ${botHistoryFilter.ticker===t?'selected':''}>${t}</option>`).join('')}
@@ -4001,10 +4146,11 @@ function renderBotHistory() {
         <option value="all">Todas las estrategias</option>
         ${strats.map(s => `<option value="${s}" ${botHistoryFilter.strategy===s?'selected':''}>${s}</option>`).join('')}
       </select>
-      <span style="margin-left:auto;font-size:.64rem;color:var(--muted);font-family:var(--font-mono)">${filtered.length} / ${hist.length}</span>
+      <span style="margin-left:auto;font-size:.64rem;color:var(--muted);font-family:var(--font-mono)">${filtered.length} / ${trades.length}</span>
     </div>
     <div style="margin-top:4px">
-      ${rows || '<div class="bh-empty">Sin eventos que matcheen los filtros.</div>'}
+      ${trades.length ? colHeader : ''}
+      ${rows || '<div class="bh-empty">Sin trades que matcheen los filtros.</div>'}
     </div>
   `;
 }
