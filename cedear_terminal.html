@@ -3174,16 +3174,22 @@ function renderBotKpis() {
                     ? (liveEquity - capitalContributed) : null;
   const totalPnlPct = (totalPnl != null && capitalContributed > 0)
                        ? (totalPnl / capitalContributed * 100) : null;
-  pnlEl.textContent = totalPnl != null
-    ? (totalPnl >= 0 ? '+' : '−') + '$' + Math.abs(Math.round(totalPnl)).toLocaleString('en-US')
-    : '—';
+  if (totalPnl != null) {
+    const amountStr = (totalPnl >= 0 ? '+' : '−')
+      + '$' + Math.abs(Math.round(totalPnl)).toLocaleString('en-US');
+    const pctNum = totalPnlPct != null ? totalPnlPct : 0;
+    const pctStr = `${pctNum >= 0 ? '+' : ''}${pctNum.toFixed(2)}%`;
+    // Monto y porcentaje en la línea grande. El % en chip más chico pero mismo color.
+    pnlEl.innerHTML =
+      `<span>${amountStr}</span>` +
+      `<span style="font-size:.72em;font-weight:600;opacity:.85;margin-left:8px">${pctStr}</span>`;
+  } else {
+    pnlEl.textContent = '—';
+  }
   pnlEl.style.color = totalPnl == null ? 'var(--text)'
     : totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
-  const pctStr = totalPnlPct != null
-    ? `${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%`
-    : '—';
   document.getElementById('kpiTrades').textContent =
-    `${pctStr} sobre $${fmtN(capitalContributed)} · ${mm.trades} cierres`;
+    `sobre $${fmtN(capitalContributed)} aportado · ${mm.trades} cierres`;
   // Tooltip con desglose de aportes
   const cfList = s.cash_flows || [];
   const cfLines = cfList.length
