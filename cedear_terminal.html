@@ -3188,8 +3188,23 @@ function renderBotKpis() {
   }
   pnlEl.style.color = totalPnl == null ? 'var(--text)'
     : totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
+  // Fecha desde cuando el bot está rindiendo: primer cash flow (initial deposit).
+  // Si no hay cashflows pero sí trades, fallback al primer trade del history.
+  let sinceStr = '';
+  const firstCf = (s.cash_flows || []).slice().sort((a, b) =>
+    (a.ts || '').localeCompare(b.ts || ''))[0];
+  const firstHist = (s.history || [])[0];
+  const sinceTs = firstCf?.ts || firstHist?.ts;
+  if (sinceTs) {
+    const d = new Date(sinceTs);
+    if (!isNaN(d.getTime())) {
+      const days = Math.max(1, Math.floor((Date.now() - d.getTime()) / 86400000));
+      const dateStr = d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
+      sinceStr = ` · desde ${dateStr} (${days}d)`;
+    }
+  }
   document.getElementById('kpiTrades').textContent =
-    `sobre $${fmtN(capitalContributed)} aportado · ${mm.trades} cierres`;
+    `sobre $${fmtN(capitalContributed)} aportado${sinceStr} · ${mm.trades} cierres`;
   // Tooltip con desglose de aportes
   const cfList = s.cash_flows || [];
   const cfLines = cfList.length
