@@ -115,6 +115,12 @@ DD_PAUSE_THRESHOLD = 0.10   # -10% desde el peak → pausar nuevas aperturas
 # va a subir el stop más allá del entry cuando el precio supere entry + auxPrice).
 BREAKEVEN_TRIGGER_PCT = 0.03   # +3% en ganancia → mover stop a entry
 
+# Capital inicial conocido (aporte fundacional). Solo se usa en la migración
+# del state cuando todavía no existe el campo capital_contributed. A partir
+# de ahí, los aportes se registran vía /bot/cashflow desde la UI.
+INITIAL_CAPITAL    = 1_000_000
+INITIAL_DEPOSIT_TS = '2026-04-15'
+
 # IBKR
 IB_HOST = '127.0.0.1'
 IB_PORT = 4002          # IB Gateway paper → 4002 | TWS paper → 7497
@@ -146,11 +152,33 @@ def load_state():
     if Path(STATE_FILE).exists():
         with open(STATE_FILE) as f:
             s = json.load(f)
-            # migración: asegurar que existe history
+            # migración: asegurar que existen campos nuevos
             if 'history' not in s:
                 s['history'] = []
+            if 'capital_contributed' not in s:
+                s['capital_contributed'] = INITIAL_CAPITAL
+                s['cash_flows'] = [{
+                    'ts':     INITIAL_DEPOSIT_TS,
+                    'type':   'deposit',
+                    'amount': INITIAL_CAPITAL,
+                    'note':   'initial (inferido en migración)',
+                }]
+            if 'cash_flows' not in s:
+                s['cash_flows'] = []
+            if 'equity_history' not in s:
+                s['equity_history'] = []
             return s
-    return {'positions': {}, 'last_run': None, 'total_trades': 0, 'history': []}
+    return {
+        'positions': {}, 'last_run': None, 'total_trades': 0, 'history': [],
+        'capital_contributed': INITIAL_CAPITAL,
+        'cash_flows': [{
+            'ts':     INITIAL_DEPOSIT_TS,
+            'type':   'deposit',
+            'amount': INITIAL_CAPITAL,
+            'note':   'initial',
+        }],
+        'equity_history': [],
+    }
 
 
 def save_state(state):
@@ -1023,6 +1051,21 @@ def run_signals(dry_run=False):
     peak_equity = max(state.get('peak_equity', equity), equity)
     state['peak_equity']    = peak_equity
     state['current_equity'] = equity
+
+    # Snapshot diario de equity. Lo persistimos para poder calcular TWR
+    # (time-weighted return) cuando tengamos suficiente serie. Una entrada
+    # por día (último run del día gana si hay catch-up).
+    today_iso = datetime.now().strftime('%Y-%m-%d')
+    eq_hist   = state.setdefault('equity_history', [])
+    if eq_hist and eq_hist[-1]['date'] == today_iso:
+        eq_hist[-1]['equity']              = equity
+        eq_hist[-1]['capital_contributed'] = state.get('capital_contributed', INITIAL_CAPITAL)
+    else:
+        eq_hist.append({
+            'date':                today_iso,
+            'equity':              equity,
+            'capital_contributed': state.get('capital_contributed', INITIAL_CAPITAL),
+        })
     current_dd = (equity - peak_equity) / peak_equity if peak_equity > 0 else 0
     dd_paused  = current_dd < -DD_PAUSE_THRESHOLD
     if dd_paused:

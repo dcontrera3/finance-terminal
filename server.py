@@ -531,13 +531,25 @@ def _read_bot_state():
             'positions': {}, 'history': [], 'last_run': None,
             'total_trades': 0, 'peak_equity': 0, 'current_equity': None,
         }
-    s.setdefault('positions',      {})
-    s.setdefault('history',        [])
-    s.setdefault('last_run',       None)
-    s.setdefault('total_trades',   0)
-    s.setdefault('peak_equity',    0)
-    s.setdefault('current_equity', None)
+    s.setdefault('positions',           {})
+    s.setdefault('history',             [])
+    s.setdefault('last_run',            None)
+    s.setdefault('total_trades',        0)
+    s.setdefault('peak_equity',         0)
+    s.setdefault('current_equity',      None)
+    s.setdefault('capital_contributed', 1_000_000)
+    s.setdefault('cash_flows',          [])
+    s.setdefault('equity_history',      [])
     return s
+
+
+def _write_bot_state(s):
+    """Escribe bot_state.json atómicamente para evitar corrupción si el bot
+    está corriendo en paralelo."""
+    tmp = BOT_STATE_PATH + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(s, f, indent=2, default=str)
+    os.replace(tmp, BOT_STATE_PATH)
 
 
 def _compute_metrics(state):
@@ -613,14 +625,60 @@ def bot_state():
     cur  = s.get('current_equity')
     dd   = round((cur - peak) / peak * 100, 2) if (peak and cur) else None
     return jsonify({
-        'positions':       s.get('positions', {}),
-        'history':         s.get('history', [])[-200:],   # últimos 200 eventos
-        'last_run':        s.get('last_run'),
-        'total_trades':    s.get('total_trades', 0),
-        'peak_equity':     peak,
-        'current_equity':  cur,
-        'drawdown_pct':    dd,
-        'positions_count': len(s.get('positions', {})),
+        'positions':           s.get('positions', {}),
+        'history':             s.get('history', [])[-200:],   # últimos 200 eventos
+        'last_run':            s.get('last_run'),
+        'total_trades':        s.get('total_trades', 0),
+        'peak_equity':         peak,
+        'current_equity':      cur,
+        'drawdown_pct':        dd,
+        'positions_count':     len(s.get('positions', {})),
+        'capital_contributed': s.get('capital_contributed', 1_000_000),
+        'cash_flows':          s.get('cash_flows', []),
+    })
+
+
+@app.route("/bot/cashflow", methods=['POST'])
+@limiter.limit("30 per minute")
+@require_auth
+def bot_cashflow():
+    """Registra un aporte (deposit) o retiro (withdrawal) de capital.
+
+    Body JSON:
+      type:   "deposit" | "withdrawal"
+      amount: número positivo en USD
+      ts:     ISO date opcional (default: ahora)
+      note:   string opcional
+    """
+    data = request.get_json(silent=True) or {}
+    cf_type = data.get('type')
+    if cf_type not in ('deposit', 'withdrawal'):
+        return jsonify({'error': 'type must be deposit or withdrawal'}), 400
+    try:
+        amount = float(data.get('amount', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'amount must be a number'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'amount must be > 0'}), 400
+
+    ts   = (data.get('ts') or datetime.utcnow().isoformat(timespec='seconds'))
+    note = (data.get('note') or '').strip()
+
+    s = _read_bot_state()
+    delta = amount if cf_type == 'deposit' else -amount
+    s['capital_contributed'] = round(float(s.get('capital_contributed', 0)) + delta, 2)
+    s['cash_flows'] = list(s.get('cash_flows', [])) + [{
+        'ts':     ts,
+        'type':   cf_type,
+        'amount': round(amount, 2),
+        'note':   note,
+    }]
+    _write_bot_state(s)
+
+    return jsonify({
+        'ok':                  True,
+        'capital_contributed': s['capital_contributed'],
+        'cash_flows':          s['cash_flows'],
     })
 
 

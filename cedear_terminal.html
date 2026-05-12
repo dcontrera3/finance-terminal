@@ -176,6 +176,11 @@ body{background:var(--bg0);color:var(--text);font-family:var(--font-sans);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .dash-kpi-s{font-size:.62rem;color:var(--muted);font-family:var(--font-mono);font-weight:500;margin-top:2px;}
 
+.cf-radio-card{padding:12px;background:var(--bg2);border:1.5px solid var(--border);border-radius:var(--radius-md);
+  text-align:center;transition:all .15s;}
+.cf-radio-card:hover{border-color:var(--border2);}
+input[type="radio"]:checked + .cf-radio-card[data-type="deposit"]{border-color:var(--green);background:rgba(34,197,94,.08);}
+input[type="radio"]:checked + .cf-radio-card[data-type="withdrawal"]{border-color:var(--red);background:rgba(239,68,68,.08);}
 .dash-dd-warn{padding:11px 14px;border-radius:var(--radius-md);background:linear-gradient(135deg,rgba(239,68,68,.12) 0%,rgba(239,68,68,.04) 100%);
   border:1px solid rgba(239,68,68,.35);color:var(--red);font-size:.74rem;font-weight:600;display:none;}
 .dash-dd-warn.show{display:block;}
@@ -832,6 +837,65 @@ canvas{display:block;}
   </div>
 </div>
 
+<!-- CASHFLOW MODAL: registrar aporte o retiro de capital -->
+<div class="sim-overlay" id="cashflowOverlay" onclick="if(event.target===this)closeCashflowModal()">
+  <div class="sim-modal" style="width:480px">
+    <div class="sim-head">
+      <div class="sim-title">💰 Registrar movimiento de capital</div>
+      <div class="sim-close" onclick="closeCashflowModal()">✕</div>
+    </div>
+    <div class="sim-body" style="gap:14px">
+      <div style="font-size:.75rem;color:var(--muted);line-height:1.5">
+        Registrá un aporte (deposit) o retiro (withdrawal) cuando movés capital en IBKR.
+        El P&amp;L se recalcula sobre el capital aportado real para que los deposits no inflen el rendimiento.
+      </div>
+      <div>
+        <div style="font-size:.65rem;color:var(--muted);letter-spacing:.5px;font-weight:600;text-transform:uppercase;margin-bottom:6px">Tipo</div>
+        <div style="display:flex;gap:8px">
+          <label style="flex:1;cursor:pointer">
+            <input type="radio" name="cfType" value="deposit" checked style="display:none">
+            <div class="cf-radio-card" data-type="deposit">
+              <div style="font-weight:700;font-size:.85rem;color:var(--green)">+ APORTE</div>
+              <div style="font-size:.65rem;color:var(--muted)">Sumás capital</div>
+            </div>
+          </label>
+          <label style="flex:1;cursor:pointer">
+            <input type="radio" name="cfType" value="withdrawal" style="display:none">
+            <div class="cf-radio-card" data-type="withdrawal">
+              <div style="font-weight:700;font-size:.85rem;color:var(--red)">− RETIRO</div>
+              <div style="font-size:.65rem;color:var(--muted)">Sacás capital</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:.65rem;color:var(--muted);letter-spacing:.5px;font-weight:600;text-transform:uppercase;margin-bottom:6px">Monto USD</div>
+        <input type="number" id="cfAmount" min="0" step="0.01" placeholder="50000"
+          style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);
+                 border-radius:var(--radius-md);color:var(--text);font-family:var(--font-mono);font-size:1rem">
+      </div>
+      <div>
+        <div style="font-size:.65rem;color:var(--muted);letter-spacing:.5px;font-weight:600;text-transform:uppercase;margin-bottom:6px">Fecha (opcional)</div>
+        <input type="date" id="cfDate"
+          style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);
+                 border-radius:var(--radius-md);color:var(--text);font-family:var(--font-mono);font-size:.85rem">
+      </div>
+      <div>
+        <div style="font-size:.65rem;color:var(--muted);letter-spacing:.5px;font-weight:600;text-transform:uppercase;margin-bottom:6px">Nota (opcional)</div>
+        <input type="text" id="cfNote" maxlength="120" placeholder="aporte mensual mayo"
+          style="width:100%;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);
+                 border-radius:var(--radius-md);color:var(--text);font-family:var(--font-sans);font-size:.8rem">
+      </div>
+      <div id="cfMsg" style="font-size:.7rem;color:var(--red);min-height:14px"></div>
+      <button id="cfSubmitBtn" onclick="submitCashflow()"
+        style="padding:11px;background:var(--accent);border:none;border-radius:var(--radius-md);
+               color:white;font-family:var(--font-sans);font-weight:700;font-size:.8rem;
+               letter-spacing:.5px;cursor:pointer">REGISTRAR</button>
+      <div id="cfHistory" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ALERT MODAL -->
 <div class="alert-overlay" id="alertOverlay" onclick="if(event.target===this)closeAlerts()">
   <div class="alert-modal">
@@ -1026,6 +1090,10 @@ canvas{display:block;}
           <div class="dash-sub" id="dashSub">Estado del bot en vivo</div>
         </div>
         <div class="view-toggle">
+          <button id="cashflowBtn" onclick="openCashflowModal()" title="Registrar aporte o retiro de capital"
+            style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:7px 12px;
+                   border-radius:var(--radius-md);font-family:var(--font-sans);font-size:.7rem;font-weight:600;
+                   cursor:pointer;letter-spacing:.3px;margin-right:8px;">+ APORTE</button>
           <button id="toggleDash" class="active" onclick="switchView('dashboard')">📊 DASHBOARD</button>
           <button id="toggleChart" onclick="switchView('chart')">📈 GRÁFICO</button>
         </div>
@@ -1040,7 +1108,7 @@ canvas{display:block;}
           <div class="dash-kpi-s" id="kpiDd">DD —</div>
         </div>
         <div class="dash-kpi">
-          <div class="dash-kpi-l">P&amp;L Cerrado</div>
+          <div class="dash-kpi-l">P&amp;L Total</div>
           <div class="dash-kpi-v" id="kpiPnl">—</div>
           <div class="dash-kpi-s" id="kpiTrades">0 trades</div>
         </div>
@@ -3097,15 +3165,41 @@ function renderBotKpis() {
   ddEl.style.color = liveDd != null && liveDd < 0 ? 'var(--red)' : 'var(--muted)';
 
   const pnlEl = document.getElementById('kpiPnl');
-  // % sobre capital base (current_equity descontando el pnl acumulado de cierres).
-  // No es perfecto si el equity arrancó distinto, pero es la mejor aproximación
-  // sin un campo `initial_equity` en el state.
-  const baseCap = (s.current_equity || 0) - pnl;
-  const pnlPct  = baseCap > 0 ? (pnl / baseCap * 100) : 0;
-  pnlEl.textContent = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
-  pnlEl.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text)';
+  // PnL real = liveEquity (incluye open mark-to-market) menos capital aportado
+  // (deposits − withdrawals). Esta es la métrica honesta: no infla cuando
+  // hacés un deposit (suben equity y capital igual). Cuando tengamos serie
+  // diaria de equity_history podemos calcular TWR (Fase B del roadmap).
+  const capitalContributed = s.capital_contributed || 0;
+  const totalPnl = (s.current_equity != null && capitalContributed > 0)
+                    ? (liveEquity - capitalContributed) : null;
+  const totalPnlPct = (totalPnl != null && capitalContributed > 0)
+                       ? (totalPnl / capitalContributed * 100) : null;
+  pnlEl.textContent = totalPnl != null
+    ? (totalPnl >= 0 ? '+' : '−') + '$' + Math.abs(Math.round(totalPnl)).toLocaleString('en-US')
+    : '—';
+  pnlEl.style.color = totalPnl == null ? 'var(--text)'
+    : totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
+  const pctStr = totalPnlPct != null
+    ? `${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%`
+    : '—';
   document.getElementById('kpiTrades').textContent =
-    `${pnl >= 0 ? '+' : ''}$${fmtN(pnl)} · ${mm.trades} trades`;
+    `${pctStr} sobre $${fmtN(capitalContributed)} · ${mm.trades} cierres`;
+  // Tooltip con desglose de aportes
+  const cfList = s.cash_flows || [];
+  const cfLines = cfList.length
+    ? cfList.map(cf => {
+        const sign = cf.type === 'deposit' ? '+' : '−';
+        const date = (cf.ts || '').slice(0, 10);
+        return `  ${date}  ${sign}$${Math.round(cf.amount).toLocaleString('en-US')}  ${cf.note || ''}`.trim();
+      }).join('\n')
+    : '  (sin aportes registrados)';
+  pnlEl.title =
+    `Capital aportado: $${Math.round(capitalContributed).toLocaleString('en-US')}\n` +
+    `Equity live:      $${Math.round(liveEquity).toLocaleString('en-US')}\n` +
+    `P&L absoluto:     ${totalPnl != null ? (totalPnl >= 0 ? '+' : '−') + '$' + Math.abs(Math.round(totalPnl)).toLocaleString('en-US') : '—'}\n` +
+    `P&L cerrado:      ${pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(pnl)).toLocaleString('en-US')} (${mm.trades} trades)\n` +
+    `P&L abierto:      ${openPnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(openPnl)).toLocaleString('en-US')}\n` +
+    `\nAportes:\n${cfLines}`;
 
   const wrEl = document.getElementById('kpiWr');
   wrEl.textContent = wr.toFixed(1) + '%';
@@ -3120,6 +3214,115 @@ function startBotPolling() {
   if (botPollTimer) return;
   loadBotSnapshot();
   botPollTimer = setInterval(() => loadBotSnapshot(true), 30000);
+}
+
+// ══════════════════════════════════════════
+// CASHFLOW (aportes/retiros de capital del bot)
+// ══════════════════════════════════════════
+
+function openCashflowModal() {
+  const ov = document.getElementById('cashflowOverlay');
+  if (!ov) return;
+  // Reset campos
+  document.getElementById('cfAmount').value = '';
+  document.getElementById('cfNote').value   = '';
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('cfDate').value = today;
+  document.querySelector('input[name="cfType"][value="deposit"]').checked = true;
+  document.getElementById('cfMsg').textContent = '';
+  document.getElementById('cfSubmitBtn').disabled = false;
+  document.getElementById('cfSubmitBtn').textContent = 'REGISTRAR';
+
+  // Render history actual
+  renderCashflowHistory();
+
+  ov.classList.add('open');
+  setTimeout(() => document.getElementById('cfAmount').focus(), 100);
+}
+
+function closeCashflowModal() {
+  document.getElementById('cashflowOverlay').classList.remove('open');
+}
+
+function renderCashflowHistory() {
+  const cfList = (botSnapshot && botSnapshot.cash_flows) || [];
+  const el = document.getElementById('cfHistory');
+  if (!el) return;
+  if (cfList.length === 0) {
+    el.innerHTML = '<div style="font-size:.7rem;color:var(--muted);padding-top:8px;border-top:1px solid var(--border)">Sin movimientos registrados todavía.</div>';
+    return;
+  }
+  const total = (botSnapshot && botSnapshot.capital_contributed) || 0;
+  const rows = cfList.slice().reverse().map(cf => {
+    const sign  = cf.type === 'deposit' ? '+' : '−';
+    const color = cf.type === 'deposit' ? 'var(--green)' : 'var(--red)';
+    const date  = (cf.ts || '').slice(0, 10);
+    const note  = cf.note ? `<span style="color:var(--muted)">· ${cf.note}</span>` : '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.72rem;border-bottom:1px solid var(--border)">
+      <span style="font-family:var(--font-mono);color:var(--muted)">${date}</span>
+      <span style="color:${color};font-weight:600">${sign}$${Math.round(cf.amount).toLocaleString('en-US')}</span>
+      ${note}
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div style="font-size:.65rem;color:var(--muted);letter-spacing:.5px;font-weight:600;text-transform:uppercase;margin-bottom:6px;padding-top:10px;border-top:1px solid var(--border)">Historial</div>
+    ${rows}
+    <div style="display:flex;justify-content:space-between;padding:8px 0 0;font-size:.75rem;font-weight:700">
+      <span>Total aportado</span>
+      <span style="font-family:var(--font-mono)">$${Math.round(total).toLocaleString('en-US')}</span>
+    </div>`;
+}
+
+async function submitCashflow() {
+  const type   = document.querySelector('input[name="cfType"]:checked')?.value || 'deposit';
+  const amount = parseFloat(document.getElementById('cfAmount').value);
+  const date   = document.getElementById('cfDate').value;
+  const note   = document.getElementById('cfNote').value.trim();
+  const msg    = document.getElementById('cfMsg');
+  const btn    = document.getElementById('cfSubmitBtn');
+
+  if (!isFinite(amount) || amount <= 0) {
+    msg.textContent = 'Ingresá un monto válido mayor a 0';
+    return;
+  }
+  // Confirmación para evitar accidentes
+  const sign = type === 'deposit' ? '+' : '−';
+  const fmt  = '$' + Math.round(amount).toLocaleString('en-US');
+  if (!confirm(`Confirmar ${type === 'deposit' ? 'APORTE' : 'RETIRO'} de ${sign}${fmt}${note ? ' (' + note + ')' : ''}?`)) {
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'GUARDANDO...';
+  msg.textContent = '';
+  try {
+    const body = { type, amount, note };
+    if (date) body.ts = date + 'T00:00:00';
+    const r = await fetch(`${API}/bot/cashflow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      msg.textContent = err.error || `Error ${r.status}`;
+      btn.disabled = false;
+      btn.textContent = 'REGISTRAR';
+      return;
+    }
+    // Refrescar snapshot del bot para recalcular KPIs con el capital nuevo
+    await loadBotSnapshot(true);
+    msg.style.color = 'var(--green)';
+    msg.textContent = '✓ Registrado correctamente';
+    renderCashflowHistory();
+    btn.textContent = 'CERRAR';
+    btn.onclick = () => { closeCashflowModal(); btn.onclick = submitCashflow; };
+  } catch (e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Error de red: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'REGISTRAR';
+  }
 }
 
 // ══════════════════════════════════════════
