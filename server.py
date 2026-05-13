@@ -694,7 +694,9 @@ def bot_metrics():
 BOT_TICKERS = [
     'NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT', 'AMZN',
     'GOOGL', 'TSLA', 'AVGO',
-    'JPM', 'V', 'UNH', 'KO',
+    'JPM', 'V', 'UNH', 'KO', 'COST',
+    'CAT',
+    'XLU',
     'NU', 'MELI', 'BABA',
     'SPY', 'QQQ', 'IWM',
     'GLD', 'SLV', 'XLE',
@@ -704,7 +706,7 @@ BOT_TICKERS = [
 @app.route("/bot/tickers")
 @require_auth
 def bot_tickers():
-    """Canasta de tickers que opera el bot (24). Usada para popular el seguimiento."""
+    """Canasta de tickers que opera el bot (27). Usada para popular el seguimiento."""
     return jsonify({'tickers': BOT_TICKERS})
 
 
