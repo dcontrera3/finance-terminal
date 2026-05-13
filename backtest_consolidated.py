@@ -15,7 +15,9 @@ from backtester import backtest
 TICKERS = [
     'NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT', 'AMZN',
     'GOOGL', 'TSLA', 'AVGO',
-    'JPM', 'V', 'UNH', 'KO',
+    'JPM', 'V', 'UNH', 'KO', 'COST',
+    'CAT',
+    'XLU',
     'NU', 'MELI', 'BABA',
     'SPY', 'QQQ', 'IWM',
     'GLD', 'SLV', 'XLE',

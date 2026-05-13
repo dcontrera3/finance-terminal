@@ -53,7 +53,11 @@ TICKERS = [
     'NVDA', 'AMD', 'AAPL', 'NFLX', 'META', 'MSFT', 'AMZN',
     'GOOGL', 'TSLA', 'AVGO',
     # Financiero / defensivo / consumer staples
-    'JPM', 'V', 'UNH', 'KO',
+    'JPM', 'V', 'UNH', 'KO', 'COST',
+    # Industrials
+    'CAT',
+    # Utilities
+    'XLU',
     # Fintech y tech emergente internacional
     'NU', 'MELI', 'BABA',
     # Índices
