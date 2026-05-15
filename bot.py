@@ -483,6 +483,10 @@ def place_trail_stop(ib, ticker, direction, size, stop, trail_distance):
     trail.totalQuantity  = int(size)
     trail.auxPrice       = float(trail_distance)
     trail.trailStopPrice = float(stop)
+    # GTC: el stop sobrevive entre sesiones. Default 'DAY' se descarta cuando
+    # la orden se placea post-RTH (caso 14/05: TRAIL DAY a las 16:32 ET → IBKR
+    # la dropeó overnight y BABA/XLU quedaron desnudas).
+    trail.tif            = 'GTC'
     trail.transmit       = True
 
     trail_trade = ib.placeOrder(contract, trail)
