@@ -794,7 +794,7 @@ def reconcile_pending_entries(ib, state):
         log.info(f"Reconciliación: {fixed} entry(s) actualizada(s)")
 
 
-def sync_positions_with_ibkr(ib, state):
+def sync_positions_with_ibkr(ib, state, equity=None):
     """Reconcilia state['positions'] contra las posiciones reales en IBKR.
 
     Si el trailing stop cerró una posición entre runs, IBKR ya no la tiene
@@ -807,12 +807,49 @@ def sync_positions_with_ibkr(ib, state):
       - Caso ambiguo (varias cuadrarían) → no tocar, avisar.
 
     Ignora posiciones que IBKR tiene pero el state no (podrían ser manuales).
+
+    PROTECCIONES contra lecturas inconsistentes de IBKR (incidente 2026-05-19):
+    si equity=0 o ib.positions() devuelve vacío mientras el state tiene
+    posiciones, abortamos el sync — esa combinación indica que la sync con
+    IBKR no completó. Marcar huérfanas falsas hizo que el bot duplicara
+    exposición en IWM/GLD/SLV/AVGO.
     """
     if not state['positions']:
         return
 
+    # Sanity check 1: equity nulo = accountSummary no respondió = no confiar.
+    if equity is not None and equity <= 0:
+        log.warning(f"⚠ sync abortado: equity reportado {equity} (lectura inconsistente)")
+        notifier.notify(
+            "⚠️ <b>Sync abortado</b>\n"
+            f"Equity reportado: ${equity:.2f}. State preservado, no se marcaron huérfanas."
+        )
+        return
+
+    # Forzar refresh de posiciones (no confiar en cache del connect inicial).
+    try:
+        ib.reqPositions()
+        ib.sleep(2)
+    except Exception as e:
+        log.warning(f"reqPositions falló: {e}")
+
+    ibkr_positions_raw = list(ib.positions())
+
+    # Sanity check 2: state tiene N posiciones pero IBKR reporta 0 = casi
+    # seguro un read failure. Es estadísticamente improbable que TODAS se
+    # hayan cerrado simultáneamente por trail stops entre runs.
+    if not ibkr_positions_raw and state['positions']:
+        log.warning(f"⚠ sync abortado: IBKR reportó 0 posiciones pero state tiene "
+                    f"{len(state['positions'])} — posible lectura inconsistente")
+        notifier.notify(
+            "⚠️ <b>Sync abortado</b>\n"
+            f"IBKR reportó 0 posiciones pero state tiene {len(state['positions'])}. "
+            "Lectura sospechosa, state preservado. Revisá conexión a IB Gateway."
+        )
+        return
+
     ibkr_qty = {}
-    for p in ib.positions():
+    for p in ibkr_positions_raw:
         sym = p.contract.symbol
         ibkr_qty[sym] = ibkr_qty.get(sym, 0) + int(p.position)
 
@@ -1019,14 +1056,24 @@ def run_signals(dry_run=False):
             ib.disconnect()
         return True
 
-    equity = get_equity(ib)
+    # Reintenta get_equity hasta 3 veces si retorna 0 (accountSummary puede
+    # tardar en sincronizarse post-connect, sobre todo si hubo desconexión).
+    equity = 0.0
+    for attempt in range(3):
+        equity = get_equity(ib)
+        if equity > 0:
+            break
+        log.warning(f"Equity cuenta=$0 en intento {attempt+1}/3, esperando 3s...")
+        ib.sleep(3)
     log.info(f"Equity cuenta: ${equity:,.2f}")
 
     # Reconciliar state vs IBKR: si el trailing stop cerró algo entre runs,
     # hay que sacarlo del state o el bot no re-entra aunque la señal siga.
+    # NOTA: si equity sigue $0 o IBKR reporta 0 posiciones con state lleno,
+    # el sync se aborta solo (defensa post-incidente 2026-05-19).
     log.info("── Sync posiciones con IBKR ──")
     reconcile_pending_entries(ib, state)
-    sync_positions_with_ibkr(ib, state)
+    sync_positions_with_ibkr(ib, state, equity=equity)
 
     # Precios live para ejecución: `signals[...].price` ya viene de IBKR
     # (historicalData close), pero el spot para entradas conviene traerlo
