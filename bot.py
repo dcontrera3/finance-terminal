@@ -1175,9 +1175,18 @@ def run_signals(dry_run=False):
         if current_dir == new_dir:
             continue   # sin log para evitar ruido en canasta grande
 
-        # Cerrar posición existente
+        # CRÍTICO: si new_dir es FLAT (señal no se cumple hoy) y ya tenemos
+        # una posición abierta, MANTENERLA. La estrategia (especialmente swing
+        # breakout) genera señales eventuales: solo se cumple el día t, después
+        # signal vuelve a 0. El backtester mantiene la posición hasta que el
+        # trailing stop la saca; el bot debe replicar eso. Solo cerramos por
+        # señal OPUESTA (LONG↔SHORT), no por FLAT.
+        if current_pos and new_dir == 'FLAT':
+            continue
+
+        # Cerrar posición existente (señal opuesta a la dirección actual)
         if current_pos:
-            log.info(f"[{strat}] {ticker}: cerrando {current_dir}")
+            log.info(f"[{strat}] {ticker}: cerrando {current_dir} (señal opuesta {new_dir})")
             pnl = close_position(ib, key, state)
             cycle_summary['closed'].append((ticker, strat, current_dir, pnl))
             del state['positions'][key]
