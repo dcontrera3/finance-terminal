@@ -1457,6 +1457,13 @@ def start_daemon():
         minutes = now.hour * 60 + now.minute
         return 15 * 60 + 30 <= minutes <= 20 * 60
 
+    def after_trigger_window(now):
+        # Día hábil y ya pasó el cierre de la ventana (20:00 ET).
+        if now.weekday() >= 5:
+            return False
+        minutes = now.hour * 60 + now.minute
+        return minutes > 20 * 60
+
     def load_last_daemon_date():
         state = load_state()
         v = state.get('last_daemon_run_date')
@@ -1479,10 +1486,14 @@ def start_daemon():
     # Dry run inicial para verificar conectividad y señales
     run_signals(dry_run=True)
 
-    last_run_date = load_last_daemon_date()
+    last_run_date     = load_last_daemon_date()
+    fail_alert_date   = None   # día que ya avisé "ciclo falló, reintentando"
+    missed_alert_date = None   # día que ya avisé "ventana cerrada sin ejecutar"
     while True:
         now_ny = datetime.now(ny)
-        if within_trigger_window(now_ny) and now_ny.date() != last_run_date:
+        today  = now_ny.date()
+
+        if within_trigger_window(now_ny) and today != last_run_date:
             log.info(f"Trigger {now_ny:%Y-%m-%d %H:%M %Z} → ejecutando señales")
             try:
                 valid = run_signals()
@@ -1490,10 +1501,35 @@ def start_daemon():
                 # Ciclo estéril (IBKR sin market data) → no persiste, reintenta
                 # en el próximo tick del loop (30s).
                 if valid:
-                    last_run_date = now_ny.date()
+                    last_run_date = today
                     save_last_daemon_date(last_run_date)
+                    if fail_alert_date == today:
+                        notifier.notify("✅ <b>Bot recuperado</b>\n"
+                                        "El ciclo se ejecutó OK tras fallar antes.")
+                        fail_alert_date = None
+                elif fail_alert_date != today:
+                    # Sin conexión a IBKR o sin market data. Aviso UNA vez por
+                    # día; el loop sigue reintentando cada 30s hasta las 20:00 ET.
+                    notifier.notify(
+                        "⚠️ <b>Bot: ciclo no ejecutado</b>\n"
+                        "Sin conexión a IBKR o sin market data. Reintentando "
+                        "hasta las 20:00 ET. Revisá IB Gateway / IBC.")
+                    fail_alert_date = today
             except Exception as e:
                 log.exception(f"Error en run_signals: {e}")
+                if fail_alert_date != today:
+                    notifier.notify(f"🚨 <b>Bot: error en el ciclo</b>\n{e}")
+                    fail_alert_date = today
+
+        elif (after_trigger_window(now_ny) and today != last_run_date
+              and missed_alert_date != today):
+            # La ventana 15:30-20:00 ET se cerró y el día nunca se ejecutó.
+            notifier.notify(
+                "🚨 <b>Bot: DÍA PERDIDO</b>\n"
+                "Cerró la ventana 15:30-20:00 ET y el ciclo no corrió hoy. "
+                "IB Gateway estuvo caído toda la ventana.")
+            missed_alert_date = today
+
         time.sleep(30)
 
 
