@@ -1327,10 +1327,27 @@ def run_signals(dry_run=False):
     save_state(state)
     ib.disconnect()
 
-    # Resumen por Telegram
     n_open   = len(cycle_summary['opened'])
     n_close  = len(cycle_summary['closed'])
     open_pos = len(state['positions'])
+
+    # Ciclo es "válido" salvo que todas las señales pendientes se hayan
+    # descartado por falta de precio IBKR. Ese caso (IBKR conecta pero
+    # reqMktData no devuelve nada) NO debe marcar el día como ejecutado.
+    cycle_valid = not (dropped_no_price > 0 and n_open == 0 and n_close == 0)
+
+    if not cycle_valid:
+        # Ciclo estéril: transitorio. El daemon cuenta la racha, reinicia el
+        # Gateway si persiste y avisa por Telegram en ese momento. Acá solo log
+        # — no notificamos para no spamear con cada ciclo estéril.
+        log.warning(f"Ciclo estéril: {dropped_no_price} señales pendientes "
+                    f"descartadas por falta de precio IBKR. No se marca como "
+                    f"ejecutado — el daemon reintentará.")
+        return cycle_valid
+
+    # Ciclo válido → resumen por Telegram (aperturas/cierres reales, o el latido
+    # diario "sin cambios" que confirma que el bot corrió y revisó el mercado).
+    log.info("Ciclo completado.")
     if n_open or n_close:
         lines = [f"📊 <b>Ciclo completado</b>",
                  f"Equity ${cycle_summary['equity']:,.0f}  |  Posiciones activas {open_pos}"]
@@ -1357,25 +1374,6 @@ def run_signals(dry_run=False):
         notifier.notify(
             f"📊 Ciclo completado — sin cambios.\n"
             f"Equity ${cycle_summary['equity']:,.0f}  |  Pos {open_pos}{dd_tag}"
-        )
-
-    # Ciclo es "válido" salvo que todas las señales pendientes se hayan
-    # descartado por falta de precio IBKR. Ese caso (IBKR conecta pero
-    # reqMktData no devuelve nada) NO debe marcar el día como ejecutado.
-    n_open  = len(cycle_summary['opened'])
-    n_close = len(cycle_summary['closed'])
-    cycle_valid = not (dropped_no_price > 0 and n_open == 0 and n_close == 0)
-
-    if cycle_valid:
-        log.info("Ciclo completado.")
-    else:
-        log.warning(f"Ciclo estéril: {dropped_no_price} señales pendientes descartadas "
-                    f"por falta de precio IBKR. No se marca como ejecutado — el daemon "
-                    f"reintentará.")
-        notifier.notify(
-            f"⚠️ <b>Ciclo estéril</b>\n"
-            f"{dropped_no_price} señales descartadas por falta de precio IBKR.\n"
-            f"Revisá IB Gateway (market data). El daemon reintenta."
         )
     return cycle_valid
 
@@ -1551,6 +1549,7 @@ def start_daemon():
     sterile_streak    = 0      # ciclos estériles/sin-conexión consecutivos
     gw_restarts_today = 0      # reinicios de Gateway disparados hoy
     gw_restart_date   = None   # día del contador de reinicios
+    recovery_pending  = False  # hubo reinicio → avisar "recuperado" al ejecutar
     while True:
         now_ny = datetime.now(ny)
         today  = now_ny.date()
@@ -1566,30 +1565,26 @@ def start_daemon():
                     last_run_date  = today
                     sterile_streak = 0
                     save_last_daemon_date(last_run_date)
-                    if fail_alert_date == today:
+                    if recovery_pending:
                         notifier.notify("✅ <b>Bot recuperado</b>\n"
-                                        "El ciclo se ejecutó OK tras fallar antes.")
-                        fail_alert_date = None
+                                        "Ciclo ejecutado OK tras reiniciar el Gateway.")
+                        recovery_pending = False
                 else:
                     # Ciclo estéril o sin conexión: el feed de market data está
                     # roto. Contamos la racha y, si persiste, reiniciamos el
                     # Gateway (un login fresco reclama las líneas de market data).
+                    # El fallo transitorio NO se notifica: si el daemon se cura
+                    # solo, no hay nada accionable; solo avisamos al reiniciar.
                     if gw_restart_date != today:
                         gw_restarts_today = 0
                         sterile_streak    = 0   # no arrastrar la racha de ayer
                         gw_restart_date   = today
                     sterile_streak += 1
 
-                    if fail_alert_date != today:
-                        notifier.notify(
-                            "⚠️ <b>Bot: ciclo no ejecutado</b>\n"
-                            "Sin conexión a IBKR o sin market data. Reintentando "
-                            "hasta las 20:00 ET.")
-                        fail_alert_date = today
-
                     if sterile_streak >= STERILE_RESTART_AFTER:
                         if gw_restarts_today < GATEWAY_MAX_RESTARTS:
                             gw_restarts_today += 1
+                            recovery_pending  = True
                             notifier.notify(
                                 f"🔄 <b>Reiniciando IB Gateway</b> "
                                 f"({gw_restarts_today}/{GATEWAY_MAX_RESTARTS})\n"
