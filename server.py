@@ -51,14 +51,36 @@ from functools import wraps
 # el server roba market data lines al bot y genera error 10197 "sesiones
 # competidoras". Para reactivar (cuando tengamos arquitectura unificada):
 #   export IBKR_PRICES_ENABLED=true
+def _bot_daemon_running():
+    """True si el daemon del bot (bot.py --daemon) está vivo.
+
+    Candado de seguridad: el bot mantiene la conexión a IBKR para market data.
+    Si el server abre una segunda conexión (ibkr_prices), compiten por las
+    líneas y disparan error 10197. Por eso el price-stream NO debe arrancar
+    mientras el bot esté corriendo, aunque IBKR_PRICES_ENABLED sea true.
+    """
+    try:
+        import subprocess
+        r = subprocess.run(['pgrep', '-f', 'bot.py --daemon'],
+                           capture_output=True, text=True, timeout=5)
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False   # ante la duda, no bloqueamos el stream
+
 ibkr_stream = None
 if os.environ.get('IBKR_PRICES_ENABLED', 'false').lower() == 'true':
-    try:
-        from ibkr_prices import stream as ibkr_stream
-        ibkr_stream.start()
-    except Exception as _e:
-        print(f"[server] ibkr_prices no disponible: {_e}", flush=True)
-        ibkr_stream = None
+    if _bot_daemon_running():
+        print("[server] IBKR_PRICES_ENABLED=true pero el bot daemon está "
+              "corriendo → NO arranco el price-stream IBKR (evito competir por "
+              "las market data lines y disparar error 10197). Uso yfinance.",
+              flush=True)
+    else:
+        try:
+            from ibkr_prices import stream as ibkr_stream
+            ibkr_stream.start()
+        except Exception as _e:
+            print(f"[server] ibkr_prices no disponible: {_e}", flush=True)
+            ibkr_stream = None
 
 app = Flask(__name__)
 CORS(app)
