@@ -113,11 +113,12 @@ STRATEGIES = {
 }
 
 MAX_POS_PCT        = 0.25   # máximo 25% del equity por posición individual
-MAX_GROSS_EXPOSURE = 1.00   # tope de exposición bruta total (largos+cortos en
-                            # valor absoluto). 1.00 = sin apalancamiento: nunca
-                            # se despliega más que el equity. El backtest validó
-                            # cada ticker aislado, NO la exposición de cartera →
-                            # esta es la red de seguridad contra apalancamiento.
+MAX_GROSS_EXPOSURE = 0.70   # tope de exposición bruta total (largos+cortos en
+                            # valor absoluto, como % del equity). Validado con
+                            # backtest_portfolio.py (2021-2026): apretar el tope
+                            # mejora Sharpe y drawdown. Óptimo ~60% (Sharpe 1.04,
+                            # MaxDD -10%); 0.70 = equilibrio hasta corregir el
+                            # sesgo de orden de señales (FCFS) y re-medir.
 DD_PAUSE_THRESHOLD = 0.10   # -10% desde el peak → pausar nuevas aperturas
 
 # Breakeven lock: cuando un trade alcanza este % de ganancia, subimos el stop
