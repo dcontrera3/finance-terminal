@@ -25,6 +25,8 @@ import json
 import argparse
 import logging
 import time
+import socket
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -129,6 +131,17 @@ INITIAL_DEPOSIT_TS = '2026-04-15'
 IB_HOST = '127.0.0.1'
 IB_PORT = 4002          # IB Gateway paper → 4002 | TWS paper → 7497
 IB_CLIENT_ID = 1
+
+# Auto-recuperación del Gateway: si N ciclos consecutivos quedan estériles
+# (IBKR conecta pero no entrega market data — típicamente error 10197
+# "competing live session"), el daemon reinicia el Gateway vía systemd. Un
+# login fresco reclama las líneas de market data. Incidente 2026-06-01: una
+# sesión fantasma de IBKR robaba el feed y el bot reintentaba estéril sin
+# avanzar hasta que se reinició el Gateway a mano.
+GATEWAY_SERVICE       = 'ibc-gateway.service'
+STERILE_RESTART_AFTER = 2     # ciclos estériles consecutivos antes de reiniciar
+GATEWAY_MAX_RESTARTS  = 3      # tope de reinicios por día (luego solo alerta)
+GATEWAY_BOOT_TIMEOUT  = 90     # segundos a esperar que el puerto API reabra
 
 STATE_FILE = 'bot_state.json'
 
@@ -425,6 +438,52 @@ def connect_ibkr():
         log.error(f"No se pudo conectar a IBKR: {e}")
         log.error("Verificá que IB Gateway esté corriendo en modo Paper.")
         return None
+
+
+def _port_open(host, port, timeout=2):
+    """True si algo está escuchando en host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def restart_gateway():
+    """Reinicia el IB Gateway vía systemd y espera a que reabra el puerto API.
+
+    Se usa cuando el feed de market data quedó roto (p. ej. error 10197
+    "competing live session"): un login fresco reclama las líneas de market
+    data y desplaza la sesión que las estaba ocupando. Las órdenes TRAIL son
+    GTC en el servidor de IBKR, así que sobreviven el reinicio. Paper no pide
+    2FA → el re-login de IBC es automático.
+
+    Retorna True si el Gateway volvió a escuchar en IB_PORT dentro del timeout.
+    """
+    log.warning(f"Reiniciando {GATEWAY_SERVICE} — feed de market data roto.")
+    try:
+        subprocess.run(
+            ['systemctl', '--user', 'restart', GATEWAY_SERVICE],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            FileNotFoundError) as e:
+        detail = getattr(e, 'stderr', '') or str(e)
+        log.error(f"No se pudo reiniciar el Gateway: {detail}")
+        return False
+
+    # IBC relanza el Gateway y reabre el puerto API. El puerto puede abrir antes
+    # de que termine el login, así que tras detectarlo damos un margen para que
+    # complete la autenticación y el sync de market data.
+    deadline = time.time() + GATEWAY_BOOT_TIMEOUT
+    while time.time() < deadline:
+        if _port_open(IB_HOST, IB_PORT):
+            time.sleep(15)
+            log.info(f"Gateway reiniciado — puerto {IB_PORT} arriba.")
+            return True
+        time.sleep(3)
+    log.error(f"Gateway no reabrió el puerto {IB_PORT} en {GATEWAY_BOOT_TIMEOUT}s.")
+    return False
 
 
 def get_equity(ib):
@@ -1489,6 +1548,9 @@ def start_daemon():
     last_run_date     = load_last_daemon_date()
     fail_alert_date   = None   # día que ya avisé "ciclo falló, reintentando"
     missed_alert_date = None   # día que ya avisé "ventana cerrada sin ejecutar"
+    sterile_streak    = 0      # ciclos estériles/sin-conexión consecutivos
+    gw_restarts_today = 0      # reinicios de Gateway disparados hoy
+    gw_restart_date   = None   # día del contador de reinicios
     while True:
         now_ny = datetime.now(ny)
         today  = now_ny.date()
@@ -1501,20 +1563,59 @@ def start_daemon():
                 # Ciclo estéril (IBKR sin market data) → no persiste, reintenta
                 # en el próximo tick del loop (30s).
                 if valid:
-                    last_run_date = today
+                    last_run_date  = today
+                    sterile_streak = 0
                     save_last_daemon_date(last_run_date)
                     if fail_alert_date == today:
                         notifier.notify("✅ <b>Bot recuperado</b>\n"
                                         "El ciclo se ejecutó OK tras fallar antes.")
                         fail_alert_date = None
-                elif fail_alert_date != today:
-                    # Sin conexión a IBKR o sin market data. Aviso UNA vez por
-                    # día; el loop sigue reintentando cada 30s hasta las 20:00 ET.
-                    notifier.notify(
-                        "⚠️ <b>Bot: ciclo no ejecutado</b>\n"
-                        "Sin conexión a IBKR o sin market data. Reintentando "
-                        "hasta las 20:00 ET. Revisá IB Gateway / IBC.")
-                    fail_alert_date = today
+                else:
+                    # Ciclo estéril o sin conexión: el feed de market data está
+                    # roto. Contamos la racha y, si persiste, reiniciamos el
+                    # Gateway (un login fresco reclama las líneas de market data).
+                    if gw_restart_date != today:
+                        gw_restarts_today = 0
+                        sterile_streak    = 0   # no arrastrar la racha de ayer
+                        gw_restart_date   = today
+                    sterile_streak += 1
+
+                    if fail_alert_date != today:
+                        notifier.notify(
+                            "⚠️ <b>Bot: ciclo no ejecutado</b>\n"
+                            "Sin conexión a IBKR o sin market data. Reintentando "
+                            "hasta las 20:00 ET.")
+                        fail_alert_date = today
+
+                    if sterile_streak >= STERILE_RESTART_AFTER:
+                        if gw_restarts_today < GATEWAY_MAX_RESTARTS:
+                            gw_restarts_today += 1
+                            notifier.notify(
+                                f"🔄 <b>Reiniciando IB Gateway</b> "
+                                f"({gw_restarts_today}/{GATEWAY_MAX_RESTARTS})\n"
+                                f"{sterile_streak} ciclos estériles seguidos. "
+                                f"Recuperando el feed de market data.")
+                            ok = restart_gateway()
+                            sterile_streak = 0   # Gateway fresco → chance limpia
+                            if ok:
+                                notifier.notify(
+                                    "✅ <b>Gateway reiniciado</b>\n"
+                                    "Puerto API arriba. El próximo ciclo reintenta "
+                                    "con feed limpio.")
+                            else:
+                                notifier.notify(
+                                    "🚨 <b>Gateway no reinició bien</b>\n"
+                                    "El puerto API no volvió. Revisá IBC a mano.")
+                        elif gw_restarts_today == GATEWAY_MAX_RESTARTS:
+                            # Reinicios agotados: es algo que el reinicio no
+                            # resuelve (IBKR caído, 2FA, sesión externa). Avisamos
+                            # una vez y seguimos reintentando sin tocar el Gateway.
+                            gw_restarts_today += 1   # +1 para no repetir el aviso
+                            notifier.notify(
+                                f"🚨 <b>Auto-recuperación agotada</b>\n"
+                                f"Reinicié el Gateway {GATEWAY_MAX_RESTARTS}× y "
+                                f"sigue sin market data. Necesita intervención "
+                                f"manual (¿IBKR caído? ¿2FA? ¿sesión externa?).")
             except Exception as e:
                 log.exception(f"Error en run_signals: {e}")
                 if fail_alert_date != today:
