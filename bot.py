@@ -113,6 +113,11 @@ STRATEGIES = {
 }
 
 MAX_POS_PCT        = 0.25   # máximo 25% del equity por posición individual
+MAX_GROSS_EXPOSURE = 1.00   # tope de exposición bruta total (largos+cortos en
+                            # valor absoluto). 1.00 = sin apalancamiento: nunca
+                            # se despliega más que el equity. El backtest validó
+                            # cada ticker aislado, NO la exposición de cartera →
+                            # esta es la red de seguridad contra apalancamiento.
 DD_PAUSE_THRESHOLD = 0.10   # -10% desde el peak → pausar nuevas aperturas
 
 # Breakeven lock: cuando un trade alcanza este % de ganancia, subimos el stop
@@ -1284,6 +1289,21 @@ def run_signals(dry_run=False):
             size, stop, trail_dist = calc_position(equity, price, atr_val, new_dir, strat)
             if size < 1:
                 log.warning(f"[{strat}] {ticker}: tamaño calculado < 1 share, skip")
+                continue
+
+            # Baranda de exposición bruta: la suma de notionals (largos + cortos
+            # en valor absoluto) no debe pasar del equity × MAX_GROSS_EXPOSURE.
+            # Solo frena aperturas nuevas; las posiciones abiertas siguen su
+            # trailing stop. state['positions'] ya refleja los cierres/aperturas
+            # procesados en este ciclo, así que el gross está al día.
+            gross_open   = sum(abs((p['entry'] or 0) * (p['size'] or 0))
+                               for p in state['positions'].values())
+            new_notional = price * size
+            if gross_open + new_notional > equity * MAX_GROSS_EXPOSURE:
+                log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — exposición "
+                         f"bruta llena ({gross_open/equity*100:.0f}% + "
+                         f"{new_notional/equity*100:.0f}% pasaría de "
+                         f"{MAX_GROSS_EXPOSURE*100:.0f}%)")
                 continue
 
             log.info(f"[{strat}] {ticker}: abriendo {new_dir}  "
