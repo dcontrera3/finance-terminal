@@ -113,12 +113,13 @@ STRATEGIES = {
 }
 
 MAX_POS_PCT        = 0.25   # máximo 25% del equity por posición individual
-MAX_GROSS_EXPOSURE = 0.70   # tope de exposición bruta total (largos+cortos en
-                            # valor absoluto, como % del equity). Validado con
-                            # backtest_portfolio.py (2021-2026): apretar el tope
-                            # mejora Sharpe y drawdown. Óptimo ~60% (Sharpe 1.04,
-                            # MaxDD -10%); 0.70 = equilibrio hasta corregir el
-                            # sesgo de orden de señales (FCFS) y re-medir.
+MAX_GROSS_EXPOSURE = 1.00   # tope de exposición bruta total (largos+cortos en
+                            # valor absoluto, como % del equity). Con ranking de
+                            # señales por ADX (ver más abajo), backtest_portfolio.py
+                            # (2021-2026) da el mejor Sharpe a 100%: 1.14, Ret
+                            # +113% (≈SPY +117%) con MaxDD -12.8% y SIN apalancar.
+                            # 1.00 = sin plata prestada. Subir a 150% bate a SPY
+                            # en retorno pero apalanca → recién tras validar OOS.
 DD_PAUSE_THRESHOLD = 0.10   # -10% desde el peak → pausar nuevas aperturas
 
 # Breakeven lock: cuando un trade alcanza este % de ganancia, subimos el stop
@@ -1207,6 +1208,14 @@ def run_signals(dry_run=False):
     # falta de precio IBKR, el ciclo fue "estéril" y el daemon debe reintentar.
     dropped_no_price = 0
 
+    # ── Pasada 1: cerrar por señal opuesta y recolectar candidatas a abrir ──
+    # Los cierres van SIEMPRE (no dependen del cupo ni del ranking). Las aperturas
+    # se juntan para rankearlas por calidad (ADX = fuerza de tendencia) y abrir
+    # las mejores primero hasta llenar el cupo de exposición. Antes era
+    # first-come-first-served por orden del loop; el backtest de cartera
+    # (backtest_portfolio.py) mostró que rankear por ADX duplica el retorno a
+    # igual riesgo (Sharpe 0.71→1.14 a 100% gross, 2021-2026).
+    candidates = []
     for (ticker, strat), (sig, atr_val, price_yf, snap) in signals.items():
         if not atr_val:
             continue
@@ -1257,92 +1266,97 @@ def run_signals(dry_run=False):
             del state['positions'][key]
             save_state(state)
 
-        # Abrir nueva posición (pausada si estamos en drawdown stop)
+        # Apertura → candidata (se rankea por ADX, no se abre todavía)
         if new_dir in ('LONG', 'SHORT'):
-            if dd_paused:
-                log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada (DD stop activo)")
-                continue
+            candidates.append({
+                'ticker': ticker, 'strat': strat, 'key': key, 'new_dir': new_dir,
+                'price': price, 'atr_val': atr_val, 'snap': snap,
+                'adx': (snap or {}).get('adx') or 0.0,
+            })
 
-            # Filtro de contradicción entre estrategias: si OTRA estrategia ya tiene
-            # una posición ABIERTA en este ticker con dirección opuesta, no abrimos.
-            # Caso real (VIST 2026-05-07): swing SHORT + pullback LONG terminaron
-            # auto-hedgeándose. Análisis 5y/24 tickers: 58% de los solapamientos
-            # swing↔pullback son contradicciones. Política: first-come-first-served,
-            # cuando el trail cierre la primera, la segunda volverá si sigue válida.
-            opposite_dir = 'SHORT' if new_dir == 'LONG' else 'LONG'
-            conflicting = next(
-                (p for p in state['positions'].values()
-                 if p['ticker'] == ticker and p['dir'] == opposite_dir),
-                None,
-            )
-            if conflicting:
-                log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — "
-                         f"ya hay posición {opposite_dir} de [{conflicting['strategy']}]")
-                try:
-                    notifier.notify(
-                        f"⚠️ <b>{ticker} [{strat}] {new_dir}</b> descartada\n"
-                        f"Conflicto con [{conflicting['strategy']}] {opposite_dir} ya abierta"
-                    )
-                except Exception:
-                    pass
-                continue
+    # ── Rankear candidatas por ADX (fuerza de tendencia): mejores primero ──
+    candidates.sort(key=lambda c: c['adx'], reverse=True)
 
-            size, stop, trail_dist = calc_position(equity, price, atr_val, new_dir, strat)
-            if size < 1:
-                log.warning(f"[{strat}] {ticker}: tamaño calculado < 1 share, skip")
-                continue
+    # ── Pasada 2: abrir candidatas por orden de calidad hasta llenar el cupo ──
+    for c in candidates:
+        ticker, strat, key, new_dir = c['ticker'], c['strat'], c['key'], c['new_dir']
+        price, atr_val, snap = c['price'], c['atr_val'], c['snap']
 
-            # Baranda de exposición bruta: la suma de notionals (largos + cortos
-            # en valor absoluto) no debe pasar del equity × MAX_GROSS_EXPOSURE.
-            # Solo frena aperturas nuevas; las posiciones abiertas siguen su
-            # trailing stop. state['positions'] ya refleja los cierres/aperturas
-            # procesados en este ciclo, así que el gross está al día.
-            gross_open   = sum(abs((p['entry'] or 0) * (p['size'] or 0))
-                               for p in state['positions'].values())
-            new_notional = price * size
-            if gross_open + new_notional > equity * MAX_GROSS_EXPOSURE:
-                log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — exposición "
-                         f"bruta llena ({gross_open/equity*100:.0f}% + "
-                         f"{new_notional/equity*100:.0f}% pasaría de "
-                         f"{MAX_GROSS_EXPOSURE*100:.0f}%)")
-                continue
+        if dd_paused:
+            log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada (DD stop activo)")
+            continue
 
-            log.info(f"[{strat}] {ticker}: abriendo {new_dir}  "
-                     f"entry={price:.2f}  stop={stop:.2f}  trail=${trail_dist:.2f}  "
-                     f"size={size}")
+        # Filtro de contradicción entre estrategias: si OTRA estrategia ya tiene
+        # una posición ABIERTA en este ticker con dirección opuesta, no abrimos.
+        # Con ranking, la candidata de mayor ADX llega primero y se queda el
+        # ticker. Cuando el trail cierre la primera, la otra vuelve si sigue válida.
+        opposite_dir = 'SHORT' if new_dir == 'LONG' else 'LONG'
+        conflicting = next(
+            (p for p in state['positions'].values()
+             if p['ticker'] == ticker and p['dir'] == opposite_dir),
+            None,
+        )
+        if conflicting:
+            log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — "
+                     f"ya hay posición {opposite_dir} de [{conflicting['strategy']}]")
+            continue
 
-            order_ids, fill_price = open_position(ib, ticker, new_dir, size, price, stop, trail_dist)
-            real_entry = fill_price if fill_price else price
-            state['positions'][key] = {
-                'ticker':     ticker,
-                'strategy':   strat,
-                'dir':        new_dir,
-                'entry':      real_entry,
-                'stop':       stop,
-                'trail_dist': trail_dist,
-                'size':       size,
-                'entry_date': datetime.now().strftime('%Y-%m-%d'),
-                'order_ids':  order_ids,
-                'indicators': snap,
-                'entry_pending': fill_price is None,
-            }
-            state['total_trades'] = state.get('total_trades', 0) + 1
+        size, stop, trail_dist = calc_position(equity, price, atr_val, new_dir, strat)
+        if size < 1:
+            log.warning(f"[{strat}] {ticker}: tamaño calculado < 1 share, skip")
+            continue
 
-            log_trade(state, 'open', ticker, strat, new_dir,
-                      price=real_entry, size=size, stop=stop, target=None, entry=real_entry,
-                      indicators=snap)
-            cycle_summary['opened'].append((ticker, strat, new_dir, price, stop, trail_dist, size))
+        # Baranda de exposición bruta: la suma de notionals (largos + cortos en
+        # valor absoluto) no debe pasar del equity × MAX_GROSS_EXPOSURE. Solo
+        # frena aperturas nuevas; lo abierto sigue su trailing stop.
+        # state['positions'] ya refleja los cierres y las aperturas de mayor ADX
+        # de este ciclo, así que el gross está al día.
+        gross_open   = sum(abs((p['entry'] or 0) * (p['size'] or 0))
+                           for p in state['positions'].values())
+        new_notional = price * size
+        if gross_open + new_notional > equity * MAX_GROSS_EXPOSURE:
+            log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada — exposición "
+                     f"bruta llena ({gross_open/equity*100:.0f}% + "
+                     f"{new_notional/equity*100:.0f}% pasaría de "
+                     f"{MAX_GROSS_EXPOSURE*100:.0f}%)")
+            continue
 
-            notional = price * size
-            pct_equity = (notional / equity * 100) if equity > 0 else 0
-            notifier.notify(
-                f"🟢 <b>Apertura</b>  {ticker} [{strat}] {new_dir}\n"
-                f"{size:,} acciones a ${price:,.2f}\n"
-                f"Total: <b>${notional:,.0f}</b> ({pct_equity:.1f}% equity)\n"
-                f"SL ${stop:,.2f}  |  Trail ${trail_dist:.2f} (2 ATR)"
-            )
+        log.info(f"[{strat}] {ticker}: abriendo {new_dir} (ADX {c['adx']:.0f})  "
+                 f"entry={price:.2f}  stop={stop:.2f}  trail=${trail_dist:.2f}  "
+                 f"size={size}")
 
-            save_state(state)
+        order_ids, fill_price = open_position(ib, ticker, new_dir, size, price, stop, trail_dist)
+        real_entry = fill_price if fill_price else price
+        state['positions'][key] = {
+            'ticker':     ticker,
+            'strategy':   strat,
+            'dir':        new_dir,
+            'entry':      real_entry,
+            'stop':       stop,
+            'trail_dist': trail_dist,
+            'size':       size,
+            'entry_date': datetime.now().strftime('%Y-%m-%d'),
+            'order_ids':  order_ids,
+            'indicators': snap,
+            'entry_pending': fill_price is None,
+        }
+        state['total_trades'] = state.get('total_trades', 0) + 1
+
+        log_trade(state, 'open', ticker, strat, new_dir,
+                  price=real_entry, size=size, stop=stop, target=None, entry=real_entry,
+                  indicators=snap)
+        cycle_summary['opened'].append((ticker, strat, new_dir, price, stop, trail_dist, size))
+
+        notional = price * size
+        pct_equity = (notional / equity * 100) if equity > 0 else 0
+        notifier.notify(
+            f"🟢 <b>Apertura</b>  {ticker} [{strat}] {new_dir}  (ADX {c['adx']:.0f})\n"
+            f"{size:,} acciones a ${price:,.2f}\n"
+            f"Total: <b>${notional:,.0f}</b> ({pct_equity:.1f}% equity)\n"
+            f"SL ${stop:,.2f}  |  Trail ${trail_dist:.2f}"
+        )
+
+        save_state(state)
 
     state['last_run'] = datetime.now().isoformat()
     save_state(state)
