@@ -1079,13 +1079,22 @@ def close_position(ib, key, state):
 # LÓGICA PRINCIPAL DE TRADING
 # ══════════════════════════════════════════
 
-def run_signals(dry_run=False):
+def run_signals(dry_run=False, close_only=False):
     """
     Ciclo principal:
     1. Genera señales de todos los tickers
     2. Compara con posiciones abiertas
     3. Cierra posiciones donde la señal cambió
     4. Abre posiciones donde hay señal nueva
+
+    close_only=True → PASE MATUTINO (09:35 ET): genera señales y SOLO cierra
+    posiciones cuya señal se dio vuelta. No abre nada. La señal a esa hora usa
+    la misma última vela diaria cerrada (la de ayer) que usaría el pase de las
+    15:30, así que un reverso detectado a la mañana es idéntico al de la tarde;
+    solo lo ejecutamos 6h antes. La apertura del lado opuesto la hace el pase
+    normal de las 15:30. Validado en backtest (analyze_exit_tactics.py): cerrar
+    reversos a la mañana, entradas intactas → +$7.3k sobre 28 trades. Si este
+    pase falla, el de las 15:30 cierra igual el reverso → solo puede ayudar.
 
     Retorna True si el ciclo fue "válido" (ejecutó trades o no había nada que
     hacer), False si había señales pendientes pero TODAS se descartaron por
@@ -1094,8 +1103,11 @@ def run_signals(dry_run=False):
     """
     state = load_state()
     log.info("═" * 50)
+    mode = ('PASE MATUTINO (close-only)' if close_only
+            else 'DRY RUN (sin órdenes reales)' if dry_run
+            else 'LIVE PAPER TRADING')
     log.info(f"Ejecutando señales | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    log.info(f"Modo: {'DRY RUN (sin órdenes reales)' if dry_run else 'LIVE PAPER TRADING'}")
+    log.info(f"Modo: {mode}")
     log.info(f"Estrategias activas: {', '.join(STRATEGIES.keys())}")
     notifier.startup_msg()
 
@@ -1260,8 +1272,10 @@ def run_signals(dry_run=False):
             del state['positions'][key]
             save_state(state)
 
-        # Abrir nueva posición (pausada si estamos en drawdown stop)
-        if new_dir in ('LONG', 'SHORT'):
+        # Abrir nueva posición (pausada si estamos en drawdown stop).
+        # En el pase matutino (close_only) NO abrimos: la entrada del lado
+        # opuesto queda para el pase normal de las 15:30.
+        if (not close_only) and new_dir in ('LONG', 'SHORT'):
             if dd_paused:
                 log.info(f"[{strat}] {ticker}: señal {new_dir} ignorada (DD stop activo)")
                 continue
@@ -1367,6 +1381,19 @@ def run_signals(dry_run=False):
         log.warning(f"Ciclo estéril: {dropped_no_price} señales pendientes "
                     f"descartadas por falta de precio IBKR. No se marca como "
                     f"ejecutado — el daemon reintentará.")
+        return cycle_valid
+
+    # Pase matutino: silencioso salvo que haya cerrado un reverso. Sin cierres
+    # no hay nada accionable y no queremos un ping de Telegram cada mañana.
+    if close_only:
+        log.info("Pase matutino completado.")
+        if n_close:
+            lines = [f"🌅 <b>Pase matutino — cierre de reversos ({n_close})</b>"]
+            for t, s, d, p in cycle_summary['closed']:
+                p_str = f"${p:+,.0f}" if p is not None else "?"
+                lines.append(f"  • {t} [{s}] {d} → {p_str}")
+            lines.append(f"\nLa apertura del lado opuesto, si aplica, va en el pase de las 15:30.")
+            notifier.notify('\n'.join(lines))
         return cycle_valid
 
     # Ciclo válido → resumen por Telegram (aperturas/cierres reales, o el latido
@@ -1538,6 +1565,14 @@ def start_daemon():
         minutes = now.hour * 60 + now.minute
         return 15 * 60 + 30 <= minutes <= 20 * 60
 
+    def within_morning_window(now):
+        # Pase matutino close-only: 09:35 → 10:30 ET (deja 5 min para que la
+        # apertura se asiente; catch-up hasta 10:30 por si el daemon estaba ocupado).
+        if now.weekday() >= 5:
+            return False
+        minutes = now.hour * 60 + now.minute
+        return 9 * 60 + 35 <= minutes <= 10 * 60 + 30
+
     def after_trigger_window(now):
         # Día hábil y ya pasó el cierre de la ventana (20:00 ET).
         if now.weekday() >= 5:
@@ -1560,7 +1595,23 @@ def start_daemon():
         state['last_daemon_run_date'] = d.isoformat()
         save_state(state)
 
+    def load_last_morning_date():
+        state = load_state()
+        v = state.get('last_morning_run_date')
+        if not v:
+            return None
+        try:
+            return datetime.strptime(v, '%Y-%m-%d').date()
+        except ValueError:
+            return None
+
+    def save_last_morning_date(d):
+        state = load_state()
+        state['last_morning_run_date'] = d.isoformat()
+        save_state(state)
+
     log.info("Daemon iniciado. Target 15:30 ET (catch-up hasta 20:00 ET).")
+    log.info("Pase matutino close-only 09:35 ET (cierra reversos, no abre).")
     log.info("Orders post-cierre queuean para la próxima apertura (09:30 ET).")
     log.info("(Presioná Ctrl+C para detener)")
 
@@ -1568,6 +1619,7 @@ def start_daemon():
     run_signals(dry_run=True)
 
     last_run_date     = load_last_daemon_date()
+    last_morning_date = load_last_morning_date()   # dedup del pase matutino
     fail_alert_date   = None   # día que ya avisé "ciclo falló, reintentando"
     missed_alert_date = None   # día que ya avisé "ventana cerrada sin ejecutar"
     sterile_streak    = 0      # ciclos estériles/sin-conexión consecutivos
@@ -1577,6 +1629,19 @@ def start_daemon():
     while True:
         now_ny = datetime.now(ny)
         today  = now_ny.date()
+
+        # Pase matutino close-only (09:35 ET): cierra reversos temprano. No abre.
+        # Best-effort: si falla, el pase de las 15:30 cierra el reverso igual, así
+        # que no escalamos ni reiniciamos el Gateway por esto, solo logueamos.
+        if within_morning_window(now_ny) and today != last_morning_date:
+            log.info(f"Trigger matutino {now_ny:%Y-%m-%d %H:%M %Z} → close-only")
+            try:
+                run_signals(close_only=True)
+            except Exception as e:
+                log.exception(f"Error en pase matutino (no crítico): {e}")
+            # Marcamos el día pase lo que pase: el backstop es el ciclo de las 15:30.
+            last_morning_date = today
+            save_last_morning_date(last_morning_date)
 
         if within_trigger_window(now_ny) and today != last_run_date:
             log.info(f"Trigger {now_ny:%Y-%m-%d %H:%M %Z} → ejecutando señales")
@@ -1661,6 +1726,8 @@ def main():
     parser = argparse.ArgumentParser(description='Trading Bot — Weekly Trend')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--run',      action='store_true', help='Ejecutar señales ahora')
+    group.add_argument('--morning-run', action='store_true',
+                       help='Pase matutino close-only: cierra reversos, no abre')
     group.add_argument('--dry-run',  action='store_true', help='Generar señales sin colocar órdenes')
     group.add_argument('--status',   action='store_true', help='Ver posiciones abiertas')
     group.add_argument('--history',  nargs='?', const=20, type=int, metavar='N',
@@ -1685,6 +1752,9 @@ def main():
 
     elif args.run:
         run_signals(dry_run=False)
+
+    elif args.morning_run:
+        run_signals(dry_run=False, close_only=True)
 
     elif args.daemon:
         start_daemon()
