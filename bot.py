@@ -874,7 +874,9 @@ def sync_positions_with_ibkr(ib, state, equity=None):
       - Varias estrategias por ticker → matchear la que cuadra con el diff.
       - Caso ambiguo (varias cuadrarían) → no tocar, avisar.
 
-    Ignora posiciones que IBKR tiene pero el state no (podrían ser manuales).
+    Posiciones que IBKR tiene pero el state no: NO se tocan (pueden requerir
+    decisión), pero se ALERTA por Telegram cada ciclo (chequeo inverso, abajo).
+    Punto ciego que dejó a XLU desnuda $260k un mes (incidente 2026-06-16).
 
     PROTECCIONES contra lecturas inconsistentes de IBKR (incidente 2026-05-19):
     si equity=0 o ib.positions() devuelve vacío mientras el state tiene
@@ -1007,6 +1009,29 @@ def sync_positions_with_ibkr(ib, state, equity=None):
     if orphans:
         save_state(state)
         log.info(f"Sync IBKR: {len(orphans)} posición(es) huérfana(s) removidas del state")
+
+    # ── Chequeo inverso: posiciones que IBKR tiene pero el state NO conoce ──
+    # El sync de arriba solo mira state→IBKR (¿se cerró algo del bot?). Le faltaba
+    # la dirección IBKR→state: una posición viva en el broker que el bot no sigue.
+    # Eso dejó a XLU long 5745 sh / ~$260k desnuda un mes (doble cover en el cierre
+    # del 2026-05-14/15). NO la tocamos automático (puede ser adoptar o aplanar,
+    # como decidimos a mano con XLU), pero alertamos fuerte cada ciclo hasta que
+    # se resuelva. Una posición sin manejar es un riesgo que debe molestar a diario.
+    known_tickers = set(state_by_ticker.keys())
+    for sym, q in ibkr_qty.items():
+        if q == 0 or sym in known_tickers:
+            continue
+        side = 'LONG' if q > 0 else 'SHORT'
+        px = get_market_price(ib, sym)
+        notional_str = f"${abs(px * q):,.0f}" if px else "?"
+        log.warning(f"⚠ POSICIÓN DESCONOCIDA en IBKR: {sym} {q:+} sh ({side}) "
+                    f"~{notional_str} — no está en el state del bot, sin manejar")
+        notifier.notify(
+            f"🟠 <b>Posición desconocida en IBKR</b>\n"
+            f"{sym} {q:+,} sh ({side})  ~{notional_str}\n"
+            f"Viva en el broker pero NO en el state ni manejada por el bot.\n"
+            f"Revisá: ¿aplanar o adoptar? (no la toco solo)"
+        )
 
 
 def close_position(ib, key, state):
