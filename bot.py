@@ -752,29 +752,99 @@ def lock_breakeven_stops(ib, state, prices):
         try:
             contract = Stock(ticker, 'SMART', 'USD')
             ib.qualifyContracts(contract)
-
             close_action = 'SELL' if d == 'LONG' else 'BUY'
-            new_trail = Order()
-            new_trail.orderId        = int(trail_order_id)
-            new_trail.action         = close_action
-            new_trail.orderType      = 'TRAIL'
-            new_trail.totalQuantity  = int(size)
-            new_trail.auxPrice       = float(trail_dist)
-            new_trail.trailStopPrice = float(round(entry, 2))
-            new_trail.transmit       = True
-            ib.placeOrder(contract, new_trail)
-            ib.sleep(1)
+            be_stop = round(entry, 2)
 
-            pos['stop'] = round(entry, 2)
+            # Defensa: el stop de breakeven debe quedar del lado correcto del
+            # mercado (long: por debajo del precio; short: por encima). Solo
+            # entramos acá con pnl_pct >= trigger, así que siempre se cumple;
+            # pero si por alguna razón no, forzarlo dispararía un cierre
+            # inmediato → saltamos sin marcar locked (reintenta el próximo ciclo).
+            if (d == 'LONG' and be_stop >= price) or (d == 'SHORT' and be_stop <= price):
+                log.warning(f"[{key}] breakeven {be_stop} cruzaría el mercado "
+                            f"(precio {price}); no se lockea este ciclo.")
+                continue
+
+            # REEMPLAZO, no modify in-place. Modificar un TRAIL activo dejando el
+            # auxPrice igual y cambiando solo el trailStopPrice lo rechaza IBKR
+            # con error 10067 ("stop price must be changed together with the
+            # trailing amount"): el trailStopPrice y el aux están acoplados al
+            # máximo histórico. Un TRAIL NUEVO sí acepta el trailStopPrice
+            # explícito como piso: queda en entry hasta que el precio supere
+            # entry±trail_dist y ahí retoma el trailing de 2 ATR. Cancelamos el
+            # viejo primero (evita doble orden → doble cover tipo XLU); la ventana
+            # sin stop es ~1s y estamos +3% lejos del stop, riesgo despreciable.
+            old = next((t for t in ib.openTrades()
+                        if t.order.orderId == int(trail_order_id)), None)
+            if old:
+                ib.cancelOrder(old.order)
+                for _ in range(20):
+                    ib.sleep(0.5)
+                    if old.orderStatus.status in ('Cancelled', 'ApiCancelled'):
+                        break
+
+            def _mk_trail(trail_stop):
+                o = Order()
+                o.action         = close_action
+                o.orderType      = 'TRAIL'
+                o.totalQuantity  = int(size)
+                o.auxPrice       = float(trail_dist)
+                o.trailStopPrice = float(trail_stop)
+                o.tif            = 'GTC'
+                o.transmit       = True
+                return o
+
+            new_trade = ib.placeOrder(contract, _mk_trail(be_stop))
+            accepted = False
+            for _ in range(20):
+                ib.sleep(0.5)
+                st = new_trade.orderStatus.status
+                if st in ('PreSubmitted', 'Submitted'):
+                    accepted = True
+                    break
+                if st in ('Cancelled', 'ApiCancelled', 'Inactive'):
+                    break
+
+            if not accepted:
+                # El trail a entry no fue aceptado y el viejo ya se canceló: la
+                # posición quedaría desnuda. Reponemos un trail al nivel previo
+                # y NO marcamos locked (se reintenta el próximo ciclo).
+                log.error(f"[{key}] breakeven lock FALLÓ (status="
+                          f"{new_trade.orderStatus.status}); reponiendo trail previo.")
+                fb = ib.placeOrder(contract, _mk_trail(stop))
+                ib.sleep(1)
+                ids = list(pos.get('order_ids') or [None, None])
+                if len(ids) < 2:
+                    ids = [ids[0] if ids else None, None]
+                ids[1] = fb.order.orderId
+                pos['order_ids'] = ids
+                save_state(state)
+                try:
+                    notifier.notify(
+                        f"🚨 <b>{ticker} breakeven lock FALLÓ</b>\n"
+                        f"El trail a entry no fue aceptado. Repuse el trail previo "
+                        f"(stop ${stop:,.2f}). Revisá a mano.")
+                except Exception:
+                    pass
+                continue
+
+            # Aceptado: actualizar order_ids y marcar locked (recién ahora).
+            ids = list(pos.get('order_ids') or [None, None])
+            if len(ids) < 2:
+                ids = [ids[0] if ids else None, None]
+            ids[1] = new_trade.order.orderId
+            pos['order_ids']        = ids
+            pos['stop']             = be_stop
             pos['breakeven_locked'] = True
             locked_any = True
-            log.info(f"[{key}] BREAKEVEN LOCK: stop {stop:.2f} → {entry:.2f} "
-                     f"(precio {price:.2f}, +{pnl_pct*100:.2f}%)")
+            log.info(f"[{key}] BREAKEVEN LOCK: trail reemplazado, stop {stop:.2f} → "
+                     f"{be_stop:.2f} (precio {price:.2f}, +{pnl_pct*100:.2f}%, "
+                     f"orderId {trail_order_id}→{new_trade.order.orderId})")
             try:
                 notifier.notify(
                     f"🛡 <b>{ticker} [{pos.get('strategy','')}] {d} — breakeven lock</b>\n"
                     f"Precio ${price:,.2f}  |  +{pnl_pct*100:.2f}%\n"
-                    f"Stop ${stop:,.2f} → ${entry:,.2f} (entry)"
+                    f"Stop ${stop:,.2f} → ${be_stop:,.2f} (entry)"
                 )
             except Exception:
                 pass
