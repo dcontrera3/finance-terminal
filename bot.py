@@ -152,7 +152,25 @@ STERILE_RESTART_AFTER = 2     # ciclos estériles consecutivos antes de reinicia
 GATEWAY_MAX_RESTARTS  = 3      # tope de reinicios por día (luego solo alerta)
 GATEWAY_BOOT_TIMEOUT  = 90     # segundos a esperar que el puerto API reabra
 
+# Robustez del ciclo (incidente 2026-06-18: el daemon se colgó ~19h en una
+# llamada reqHistoricalData con la conexión zombie, sin timeout del lado del
+# cliente). Dos defensas: (1) reinicio del Gateway ANTES de cada ciclo para
+# arrancar con feed fresco; (2) watchdog SIGALRM que aborta cualquier ciclo
+# que exceda el tope, sin importar dónde se trabe (interrumpe hasta un socket
+# muerto a nivel SO). El watchdog solo funciona en el hilo principal.
+PRECYCLE_GATEWAY_RESTART = True   # reiniciar el Gateway antes de cada ciclo
+CYCLE_WATCHDOG_SECS      = 360    # aborta un ciclo colgado > 6 min
+IB_REQ_TIMEOUT           = 30     # timeout (s) por llamada de datos a IBKR
+
 STATE_FILE = 'bot_state.json'
+
+# Referencia a la conexión IBKR del ciclo en curso. La usa el watchdog para
+# desconectar limpio si tiene que abortar un ciclo colgado (ver run_signals_guarded).
+_active_ib = None
+
+
+class CycleTimeout(Exception):
+    """El watchdog abortó un ciclo que excedió CYCLE_WATCHDOG_SECS."""
 
 
 # ══════════════════════════════════════════
@@ -298,6 +316,7 @@ def fetch_bars_ibkr(ib, ticker, timeframe='1d'):
             useRTH=True,
             formatDate=1,
             keepUpToDate=False,
+            timeout=IB_REQ_TIMEOUT,   # corta si la conexión quedó zombie
         )
         if not bars:
             return pd.DataFrame()
@@ -1216,6 +1235,10 @@ def run_signals(dry_run=False, close_only=False):
     if not ib and dry_run:
         log.warning("Sin IBKR en dry-run → señales con yfinance (puede haber lag).")
 
+    # Exponer la conexión al watchdog: si aborta el ciclo, la desconecta limpio.
+    global _active_ib
+    _active_ib = ib
+
     log.info("Generando señales...")
     signals = get_all_signals(ib=ib)
 
@@ -1639,6 +1662,38 @@ def print_history(n=20):
 # DAEMON — corre cada viernes al cierre
 # ══════════════════════════════════════════
 
+def _watchdog_handler(signum, frame):
+    raise CycleTimeout(f"ciclo excedió {CYCLE_WATCHDOG_SECS}s — abortado por watchdog")
+
+
+def run_signals_guarded(**kwargs):
+    """Corre run_signals bajo un watchdog SIGALRM. Si el ciclo se cuelga más de
+    CYCLE_WATCHDOG_SECS (conexión zombie a IBKR, socket muerto, etc.) levanta
+    CycleTimeout en vez de quedar frizado horas (incidente 2026-06-18: ~19h
+    colgado en reqHistoricalData). SIGALRM interrumpe hasta una syscall de red
+    bloqueada. Solo corre en el hilo principal (el daemon vive ahí).
+
+    Al abortar, desconecta la IB del ciclo para no dejar el socket colgado.
+    """
+    import signal
+    global _active_ib
+    old_handler = signal.signal(signal.SIGALRM, _watchdog_handler)
+    signal.alarm(CYCLE_WATCHDOG_SECS)
+    try:
+        return run_signals(**kwargs)
+    except CycleTimeout:
+        try:
+            if _active_ib is not None:
+                _active_ib.disconnect()
+        except Exception:
+            pass
+        _active_ib = None
+        raise
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
 def start_daemon():
     # Ventana de ejecución: 15:30 → 20:00 ET. Target es 15:30 (30 min antes
     # del cierre, deja margen de fill). Catch-up hasta 20:00 (fin extended
@@ -1713,9 +1768,22 @@ def start_daemon():
     # Dry run inicial para verificar conectividad y señales
     run_signals(dry_run=True)
 
-    last_run_date     = load_last_daemon_date()
-    last_morning_date = load_last_morning_date()   # dedup del pase matutino
-    fail_alert_date   = None   # día que ya avisé "ciclo falló, reintentando"
+    def precycle_restart(tag):
+        # Reinicio del Gateway ANTES del ciclo: login fresco reclama las líneas
+        # de market data (ataca el 10197 de raíz) y arranca con conexión limpia.
+        # Una vez por ciclo, no en cada reintento de 30s.
+        if not PRECYCLE_GATEWAY_RESTART:
+            return
+        log.info(f"Pre-ciclo ({tag}): reiniciando Gateway para feed fresco…")
+        ok = restart_gateway()
+        if not ok:
+            log.warning(f"Pre-ciclo ({tag}): el Gateway no reabrió el puerto a tiempo; "
+                        f"el ciclo intenta igual.")
+
+    last_run_date       = load_last_daemon_date()
+    last_morning_date   = load_last_morning_date()   # dedup del pase matutino
+    aft_precycle_date   = None   # día que ya hice el reinicio pre-ciclo de la tarde
+    fail_alert_date     = None   # día que ya avisé "ciclo falló, reintentando"
     missed_alert_date = None   # día que ya avisé "ventana cerrada sin ejecutar"
     sterile_streak    = 0      # ciclos estériles/sin-conexión consecutivos
     gw_restarts_today = 0      # reinicios de Gateway disparados hoy
@@ -1731,7 +1799,10 @@ def start_daemon():
         if within_morning_window(now_ny) and today != last_morning_date:
             log.info(f"Trigger matutino {now_ny:%Y-%m-%d %H:%M %Z} → close-only")
             try:
-                run_signals(close_only=True)
+                precycle_restart('matutino')
+                run_signals_guarded(close_only=True)
+            except CycleTimeout as e:
+                log.error(f"Watchdog abortó el pase matutino: {e}")
             except Exception as e:
                 log.exception(f"Error en pase matutino (no crítico): {e}")
             # Marcamos el día pase lo que pase: el backstop es el ciclo de las 15:30.
@@ -1739,9 +1810,15 @@ def start_daemon():
             save_last_morning_date(last_morning_date)
 
         if within_trigger_window(now_ny) and today != last_run_date:
+            # Reinicio pre-ciclo: una vez por día, en el primer intento de la
+            # tarde. Los reintentos de 30s posteriores NO reinician (de eso se
+            # encarga la escalada por ciclos estériles, más abajo).
+            if aft_precycle_date != today:
+                precycle_restart('tarde')
+                aft_precycle_date = today
             log.info(f"Trigger {now_ny:%Y-%m-%d %H:%M %Z} → ejecutando señales")
             try:
-                valid = run_signals()
+                valid = run_signals_guarded()
                 # Solo marcamos el día como ejecutado si el ciclo fue válido.
                 # Ciclo estéril (IBKR sin market data) → no persiste, reintenta
                 # en el próximo tick del loop (30s).
@@ -1795,6 +1872,18 @@ def start_daemon():
                                 f"Reinicié el Gateway {GATEWAY_MAX_RESTARTS}× y "
                                 f"sigue sin market data. Necesita intervención "
                                 f"manual (¿IBKR caído? ¿2FA? ¿sesión externa?).")
+            except CycleTimeout as e:
+                # El ciclo se colgó y el watchdog lo abortó. Casi seguro la
+                # conexión quedó zombie → reiniciamos el Gateway y reintentamos
+                # en el próximo tick con feed fresco. NO marca el día como hecho.
+                log.error(f"Watchdog abortó el ciclo: {e}. Reiniciando Gateway.")
+                if fail_alert_date != today:
+                    notifier.notify(
+                        f"⏱️ <b>Watchdog: ciclo colgado</b>\n"
+                        f"Abortado tras {CYCLE_WATCHDOG_SECS}s (conexión zombie). "
+                        f"Reiniciando Gateway y reintentando.")
+                    fail_alert_date = today
+                restart_gateway()
             except Exception as e:
                 log.exception(f"Error en run_signals: {e}")
                 if fail_alert_date != today:
