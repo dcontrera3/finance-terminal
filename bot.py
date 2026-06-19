@@ -162,6 +162,33 @@ PRECYCLE_GATEWAY_RESTART = True   # reiniciar el Gateway antes de cada ciclo
 CYCLE_WATCHDOG_SECS      = 360    # aborta un ciclo colgado > 6 min
 IB_REQ_TIMEOUT           = 30     # timeout (s) por llamada de datos a IBKR
 
+# Calendario NYSE. El bot opera 09:35 y 15:30 ET. En feriados (mercado cerrado
+# todo el día) NO debe correr ningún ciclo; en medios días (cierre 13:00 ET) la
+# tarde caería con el mercado ya cerrado → se saltea la tarde (la mañana abre
+# normal). Incidente 2026-06-19 (Juneteenth): sin calendario el bot abrió un CAT
+# swing con precio basura y la orden quedó encolada para el lunes.
+# EXTENDER estas listas antes de fin de 2027.
+US_MARKET_HOLIDAYS = {
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+    '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+    '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
+}
+US_MARKET_HALF_DAYS = {
+    '2026-11-27', '2026-12-24',
+    '2027-11-26',
+}
+
+
+def is_market_holiday(d):
+    """True si `d` (date/datetime ET) es feriado de mercado (cerrado todo el día)."""
+    return d.strftime('%Y-%m-%d') in US_MARKET_HOLIDAYS
+
+
+def is_market_half_day(d):
+    """True si `d` (date/datetime ET) es medio día (cierre 13:00 ET)."""
+    return d.strftime('%Y-%m-%d') in US_MARKET_HALF_DAYS
+
 STATE_FILE = 'bot_state.json'
 
 # Referencia a la conexión IBKR del ciclo en curso. La usa el watchdog para
@@ -1710,7 +1737,9 @@ def start_daemon():
     ny = ZoneInfo('America/New_York')
 
     def within_trigger_window(now):
-        if now.weekday() >= 5:
+        # Feriado (cerrado todo el día) o medio día (cierre 13:00 ET, la tarde
+        # caería con el mercado cerrado) → no se opera a la tarde.
+        if now.weekday() >= 5 or is_market_holiday(now) or is_market_half_day(now):
             return False
         minutes = now.hour * 60 + now.minute
         return 15 * 60 + 30 <= minutes <= 20 * 60
@@ -1718,14 +1747,17 @@ def start_daemon():
     def within_morning_window(now):
         # Pase matutino close-only: 09:35 → 10:30 ET (deja 5 min para que la
         # apertura se asiente; catch-up hasta 10:30 por si el daemon estaba ocupado).
-        if now.weekday() >= 5:
+        # En medio día el mercado abre normal a la mañana → el pase corre igual;
+        # solo se saltea en feriado completo.
+        if now.weekday() >= 5 or is_market_holiday(now):
             return False
         minutes = now.hour * 60 + now.minute
         return 9 * 60 + 35 <= minutes <= 10 * 60 + 30
 
     def after_trigger_window(now):
-        # Día hábil y ya pasó el cierre de la ventana (20:00 ET).
-        if now.weekday() >= 5:
+        # Día hábil y ya pasó el cierre de la ventana (20:00 ET). En feriado/medio
+        # día no aplica (no hubo ciclo de tarde que perder, no alertamos "día perdido").
+        if now.weekday() >= 5 or is_market_holiday(now) or is_market_half_day(now):
             return False
         minutes = now.hour * 60 + now.minute
         return minutes > 20 * 60
