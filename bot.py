@@ -1216,6 +1216,41 @@ def close_position(ib, key, state):
     return pnl
 
 
+def refresh_stops_from_ibkr(ib, state):
+    """Actualiza pos['stop'] de cada posición con el trailStopPrice REAL de su
+    orden TRAIL en IBKR.
+
+    El trailing nativo mueve el stop solo a medida que el precio corre a favor,
+    pero el state solo lo escribía en el breakeven lock → quedaba congelado (ej
+    CAT: state 910.41 vs trail real 937.37). Esto lo mantiene honesto en cada
+    ciclo para que `--status` y el state no mientan. Matchea por el orderId del
+    trail guardado en order_ids[1].
+    """
+    if not state.get('positions'):
+        return
+    try:
+        ib.reqAllOpenOrders()
+        ib.sleep(2)
+    except Exception as e:
+        log.warning(f"refresh_stops: no se pudieron leer órdenes IBKR: {e}")
+        return
+    stop_by_oid = {t.order.orderId: t.order.trailStopPrice
+                   for t in ib.openTrades() if t.order.orderType == 'TRAIL'}
+    changed = False
+    for key, pos in state['positions'].items():
+        oid = (pos.get('order_ids') or [None, None])[1]
+        real = stop_by_oid.get(oid)
+        if real is None:
+            continue
+        if abs((pos.get('stop') or 0) - float(real)) > 0.01:
+            old = pos.get('stop')
+            pos['stop'] = round(float(real), 2)
+            changed = True
+            log.info(f"[{key}] stop refrescado del trail IBKR: {old} → {pos['stop']}")
+    if changed:
+        save_state(state)
+
+
 # ══════════════════════════════════════════
 # LÓGICA PRINCIPAL DE TRADING
 # ══════════════════════════════════════════
@@ -1299,6 +1334,10 @@ def run_signals(dry_run=False, close_only=False):
     log.info("── Sync posiciones con IBKR ──")
     reconcile_pending_entries(ib, state)
     sync_positions_with_ibkr(ib, state, equity=equity)
+    # Refrescar el stop del state con el trail real de IBKR (que se mueve solo).
+    # Mantiene el state honesto para --status; el breakeven lock de abajo igual
+    # actualiza las que recién crucen +3%.
+    refresh_stops_from_ibkr(ib, state)
 
     # Precios live para ejecución: `signals[...].price` ya viene de IBKR
     # (historicalData close), pero el spot para entradas conviene traerlo
