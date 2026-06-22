@@ -1655,6 +1655,124 @@ def notify_status():
         print_status()
 
 
+def build_live_dashboard():
+    """Vista reconciliada EN VIVO de todo lo abierto, tal cual está.
+
+    Cruza el state del bot con la realidad de IBKR (posiciones, órdenes de
+    protección y precios live) y muestra por posición: precio actual, P&L real,
+    stop verdadero (el de la orden en IBKR, no el guardado en el state que puede
+    mentir), estado de breakeven, distancia al stop, y un flag si hay desajuste
+    state↔broker. Al final lista fantasmas (posiciones en IBKR que el bot no
+    conoce) y posiciones del state que IBKR no tiene. Read-only, clientId 5
+    para no pisar al daemon (clientId 1).
+    """
+    state = load_state()
+    ib = IB()
+    try:
+        ib.connect(IB_HOST, IB_PORT, clientId=5, timeout=15)
+    except Exception as e:
+        print(f"\nNo se pudo conectar a IBKR (¿Gateway arriba? ¿daemon en pleno ciclo?): {e}\n")
+        return
+    try:
+        ib.reqMarketDataType(3)
+        ib.reqAllOpenOrders()
+        ib.sleep(3)
+        trades = list(ib.openTrades())
+        ib_pos = {}
+        for p in ib.positions():
+            ib_pos[p.contract.symbol] = ib_pos.get(p.contract.symbol, 0) + int(p.position)
+        equity = get_equity(ib)
+
+        # orderId -> trailStopPrice (la protección real de cada posición)
+        stop_by_oid = {t.order.orderId: t.order.trailStopPrice
+                       for t in trades if t.order.orderType == 'TRAIL'}
+
+        positions = state.get('positions', {})
+        tickers = sorted({p.get('ticker') for p in positions.values()} | set(ib_pos))
+        price = {tk: get_market_price(ib, tk) for tk in tickers}
+
+        print("\n" + "═" * 96)
+        print(f"  DASHBOARD EN VIVO — {datetime.now():%Y-%m-%d %H:%M}  "
+              f"|  Equity ${equity:,.0f}")
+        peak = state.get('peak_equity', 0) or 0
+        dd = (equity - peak) / peak * 100 if peak else 0
+        gross = sum(abs((price.get(p.get('ticker')) or p['entry'] or 0) * (p['size'] or 0))
+                    for p in positions.values())
+        gpct = gross / equity * 100 if equity else 0
+        print(f"  Peak ${peak:,.0f}  |  DD {dd:+.1f}%  |  Exposición bruta "
+              f"${gross:,.0f} ({gpct:.0f}%)  |  Posiciones {len(positions)}")
+        print("═" * 96)
+        print(f"  {'Ticker':<6} {'Estrategia':<13} {'Dir':<5} {'Entry':>9} {'Precio':>9} "
+              f"{'P&L $':>10} {'P&L%':>7} {'Stop':>9} {'aDist':>6}  Protección")
+        print("  " + "─" * 96)
+
+        total_pnl = 0.0
+        flags = []
+        for key, p in positions.items():
+            tk = p.get('ticker', key.split('__')[0])
+            strat = p.get('strategy', '?')
+            d = p['dir']; entry = p['entry']; size = p['size']
+            mult = 1 if d == 'LONG' else -1
+            cur = price.get(tk)
+            oid = (p.get('order_ids') or [None, None])[1]
+            real_stop = stop_by_oid.get(oid)
+
+            if cur:
+                pnl = (cur - entry) * size * mult
+                pnlpct = (cur - entry) / entry * 100 * mult
+                total_pnl += pnl
+                cur_s = f"{cur:.2f}"; pnl_s = f"${pnl:+,.0f}"; pct_s = f"{pnlpct:+.1f}%"
+            else:
+                cur_s = pnl_s = pct_s = "n/d"
+
+            # estado de protección (stop REAL de la orden en IBKR, no el del state)
+            if real_stop is None:
+                prot = "⚠ SIN STOP EN IBKR"
+                flags.append(f"{tk} [{strat}]: sin orden de protección en IBKR")
+                stop_s = "n/d"; dist_s = "n/d"
+            else:
+                stop_s = f"{real_stop:.2f}"
+                dist_s = f"{((cur - real_stop) / cur * 100 * mult):.1f}%" if cur else "n/d"
+                locked = (d == 'LONG' and real_stop >= entry - 0.01) or \
+                         (d == 'SHORT' and real_stop <= entry + 0.01)
+                if locked and abs(real_stop - entry) > 0.01:
+                    prot = f"🔒 ganancia (+${(real_stop - entry) * size * mult:,.0f})"
+                elif locked:
+                    prot = "🔒 breakeven"
+                else:
+                    prot = "trailing"
+
+            print(f"  {tk:<6} {strat:<13} {d:<5} {entry:>9.2f} {cur_s:>9} "
+                  f"{pnl_s:>10} {pct_s:>7} {stop_s:>9} {dist_s:>6}  {prot}")
+
+        print("  " + "─" * 94)
+        print(f"  P&L NO REALIZADO TOTAL: ${total_pnl:>+,.0f}")
+
+        # Reconciliación agregada state vs IBKR
+        state_by_tk = {}
+        for p in positions.values():
+            state_by_tk[p['ticker']] = state_by_tk.get(p['ticker'], 0) + (p['size'] if p['dir'] == 'LONG' else -p['size'])
+        for tk in sorted(set(state_by_tk) | set(ib_pos)):
+            exp = state_by_tk.get(tk, 0); act = ib_pos.get(tk, 0)
+            if exp != act:
+                if exp == 0:
+                    flags.append(f"👻 {tk}: IBKR tiene {act:+} sh que el bot NO conoce (fantasma)")
+                elif act == 0:
+                    flags.append(f"❓ {tk}: el state espera {exp:+} sh pero IBKR no tiene la posición")
+                else:
+                    flags.append(f"⚠ {tk}: state espera {exp:+} sh, IBKR tiene {act:+} sh")
+
+        if flags:
+            print("\n  ── DESAJUSTES / ALERTAS ──")
+            for f in flags:
+                print(f"    {f}")
+        else:
+            print("\n  ✓ State e IBKR coinciden, todas las posiciones con stop. Sin desajustes.")
+        print("═" * 96 + "\n")
+    finally:
+        ib.disconnect()
+
+
 def print_history(n=20):
     state = load_state()
     history = state.get('history', [])
@@ -1945,7 +2063,9 @@ def main():
     group.add_argument('--morning-run', action='store_true',
                        help='Pase matutino close-only: cierra reversos, no abre')
     group.add_argument('--dry-run',  action='store_true', help='Generar señales sin colocar órdenes')
-    group.add_argument('--status',   action='store_true', help='Ver posiciones abiertas')
+    group.add_argument('--status',   action='store_true', help='Ver posiciones abiertas (state, rápido)')
+    group.add_argument('--dash',     action='store_true',
+                       help='Dashboard EN VIVO: cruza state con IBKR (precio, P&L, stop real, desajustes)')
     group.add_argument('--history',  nargs='?', const=20, type=int, metavar='N',
                        help='Ver últimos N eventos del historial (default 20)')
     group.add_argument('--notify-status', action='store_true',
@@ -1956,6 +2076,9 @@ def main():
 
     if args.status:
         print_status()
+
+    elif args.dash:
+        build_live_dashboard()
 
     elif args.history is not None:
         print_history(args.history)
