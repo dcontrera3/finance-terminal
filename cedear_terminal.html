@@ -3125,9 +3125,12 @@ function renderBotKpis() {
   const wr  = mm.win_rate || 0;
   const peak = s.peak_equity || 0;
 
-  // Mark-to-market en vivo: el bot escribe current_equity solo cuando corre
-  // (1x/día post-cierre). Entre runs, sumamos el PnL no realizado de las
-  // posiciones abiertas usando los precios live del priceCache.
+  // Mark-to-market en vivo: el bot escribe current_equity (NetLiquidation) solo
+  // cuando corre (1x/día post-cierre). Ese valor YA incluye el PnL no realizado
+  // a los precios de ESE momento (el `mark`). Entre runs sumamos solo el CAMBIO
+  // desde el snapshot: Σ(precio_live − mark)·size·signo. Usar `entry` en vez de
+  // `mark` contaría dos veces el PnL ya embebido y el saldo saldría inflado vs
+  // IBKR. Fallback a entry para posiciones sin mark (recién abiertas).
   const positions = s.positions || {};
   let openPnl = 0;
   let pricesCovered = 0;
@@ -3137,8 +3140,9 @@ function renderBotKpis() {
     totalPositions++;
     const cached = priceCache[p.ticker];
     if (!cached || !isFinite(cached.price)) continue;
+    const ref = (typeof p.mark === 'number' && isFinite(p.mark)) ? p.mark : p.entry;
     const sign = p.dir === 'LONG' ? 1 : -1;
-    openPnl += (cached.price - p.entry) * p.size * sign;
+    openPnl += (cached.price - ref) * p.size * sign;
     pricesCovered++;
   }
   const baseEquity = s.current_equity || 0;
@@ -3157,8 +3161,8 @@ function renderBotKpis() {
     const openPnlStr = (openPnl >= 0 ? '+' : '−')
       + '$' + Math.abs(Math.round(openPnl)).toLocaleString('en-US');
     kpiEquityEl.title =
-      `Snapshot bot: $${Math.round(baseEquity).toLocaleString('en-US')} (${lastRunFmt})\n` +
-      `Open P&L (${pricesCovered}/${totalPositions} precios live): ${openPnlStr}\n` +
+      `Snapshot bot (NetLiq): $${Math.round(baseEquity).toLocaleString('en-US')} (${lastRunFmt})\n` +
+      `Δ desde snapshot (${pricesCovered}/${totalPositions} precios live): ${openPnlStr}\n` +
       `Live: $${Math.round(liveEquity).toLocaleString('en-US')}`;
   } else {
     kpiEquityEl.textContent = '—';

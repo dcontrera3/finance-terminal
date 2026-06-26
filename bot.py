@@ -1371,6 +1371,18 @@ def run_signals(dry_run=False, close_only=False):
     state['peak_equity']    = peak_equity
     state['current_equity'] = equity
 
+    # Estampar el precio de marca de cada posición al momento del snapshot.
+    # current_equity (NetLiquidation) YA incluye el PnL no realizado a ESTOS
+    # precios. La UI hace mark-to-market entre ciclos como
+    # current_equity + Σ(precio_live - mark)·size·signo. Si usara `entry` en vez
+    # de `mark`, sumaría de nuevo el PnL ya embebido en current_equity y el
+    # saldo de la terminal saldría inflado (~$37k) vs IBKR. Por eso guardamos el
+    # mark de este ciclo.
+    for _pos in state['positions'].values():
+        _mk = ibkr_prices.get(_pos.get('ticker'))
+        if _mk:
+            _pos['mark'] = round(float(_mk), 4)
+
     # Snapshot diario de equity. Lo persistimos para poder calcular TWR
     # (time-weighted return) cuando tengamos suficiente serie. Una entrada
     # por día (último run del día gana si hay catch-up).
