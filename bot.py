@@ -2145,6 +2145,14 @@ def main():
 
     elif args.morning_run:
         run_signals(dry_run=False, close_only=True)
+        # Marcamos el dedup como si lo hubiera hecho el daemon, así el daemon no
+        # repite el pase matutino hoy si arranca/sigue vivo tras la corrida manual.
+        from zoneinfo import ZoneInfo
+        today_ny = datetime.now(ZoneInfo('America/New_York')).date()
+        st = load_state()
+        st['last_morning_run_date'] = today_ny.isoformat()
+        save_state(st)
+        print(f"Dedup matutino marcado: {today_ny.isoformat()}")
 
     elif args.daemon:
         start_daemon()
