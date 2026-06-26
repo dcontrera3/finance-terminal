@@ -1579,8 +1579,8 @@ def run_signals(dry_run=False, close_only=False):
                     f"ejecutado — el daemon reintentará.")
         return cycle_valid
 
-    # Pase matutino: silencioso salvo que haya cerrado un reverso. Sin cierres
-    # no hay nada accionable y no queremos un ping de Telegram cada mañana.
+    # Pase matutino: siempre avisa por Telegram para confirmar que corrió, haya
+    # cerrado reversos o no.
     if close_only:
         log.info("Pase matutino completado.")
         if n_close:
@@ -1589,7 +1589,10 @@ def run_signals(dry_run=False, close_only=False):
                 p_str = f"${p:+,.0f}" if p is not None else "?"
                 lines.append(f"  • {t} [{s}] {d} → {p_str}")
             lines.append(f"\nLa apertura del lado opuesto, si aplica, va en el pase de las 15:30.")
-            notifier.notify('\n'.join(lines))
+        else:
+            lines = [f"🌅 <b>Pase matutino — sin reversos para cerrar</b>",
+                     f"Equity ${cycle_summary['equity']:,.0f}  |  Posiciones activas {open_pos}"]
+        notifier.notify('\n'.join(lines))
         return cycle_valid
 
     # Ciclo válido → resumen por Telegram (aperturas/cierres reales, o el latido
