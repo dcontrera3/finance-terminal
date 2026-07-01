@@ -2144,10 +2144,10 @@ def main():
         run_signals(dry_run=True)
 
     elif args.run:
-        run_signals(dry_run=False)
+        run_signals_guarded(dry_run=False)
 
     elif args.morning_run:
-        run_signals(dry_run=False, close_only=True)
+        run_signals_guarded(dry_run=False, close_only=True)
         # Marcamos el dedup como si lo hubiera hecho el daemon, así el daemon no
         # repite el pase matutino hoy si arranca/sigue vivo tras la corrida manual.
         from zoneinfo import ZoneInfo
