@@ -541,6 +541,21 @@ def restart_gateway():
     return False
 
 
+def precycle_gateway_restart(tag):
+    """Reinicio del Gateway ANTES de un ciclo: un login fresco reclama las líneas
+    de market data y arranca con feed limpio. Es lo que evita el cuelgue en
+    qualifyContracts cuando, tras el reset nocturno de las 02:00, los farms
+    arrancan rotos (usfarm/secdefil 'broken'). No dependemos del watchdog SIGALRM:
+    contra el epoll de ib_insync no interrumpe de forma fiable, así que atacamos
+    la causa (feed roto) en vez del síntoma (cuelgue)."""
+    if not PRECYCLE_GATEWAY_RESTART:
+        return
+    log.info(f"Pre-ciclo ({tag}): reiniciando Gateway para feed fresco…")
+    if not restart_gateway():
+        log.warning(f"Pre-ciclo ({tag}): el Gateway no reabrió el puerto a tiempo; "
+                    f"el ciclo intenta igual.")
+
+
 def get_equity(ib):
     """Retorna el net liquidation value de la cuenta paper."""
     account = ib.accountValues()
@@ -1972,17 +1987,9 @@ def start_daemon():
     # Dry run inicial para verificar conectividad y señales
     run_signals(dry_run=True)
 
-    def precycle_restart(tag):
-        # Reinicio del Gateway ANTES del ciclo: login fresco reclama las líneas
-        # de market data (ataca el 10197 de raíz) y arranca con conexión limpia.
-        # Una vez por ciclo, no en cada reintento de 30s.
-        if not PRECYCLE_GATEWAY_RESTART:
-            return
-        log.info(f"Pre-ciclo ({tag}): reiniciando Gateway para feed fresco…")
-        ok = restart_gateway()
-        if not ok:
-            log.warning(f"Pre-ciclo ({tag}): el Gateway no reabrió el puerto a tiempo; "
-                        f"el ciclo intenta igual.")
+    # Reinicio del Gateway ANTES del ciclo (login fresco reclama las líneas de
+    # market data). Mismo helper que usan los pases manuales. Una vez por ciclo.
+    precycle_restart = precycle_gateway_restart
 
     last_run_date       = load_last_daemon_date()
     last_morning_date   = load_last_morning_date()   # dedup del pase matutino
@@ -2144,9 +2151,11 @@ def main():
         run_signals(dry_run=True)
 
     elif args.run:
+        precycle_gateway_restart('run manual')
         run_signals_guarded(dry_run=False)
 
     elif args.morning_run:
+        precycle_gateway_restart('matutino manual')
         run_signals_guarded(dry_run=False, close_only=True)
         # Marcamos el dedup como si lo hubiera hecho el daemon, así el daemon no
         # repite el pase matutino hoy si arranca/sigue vivo tras la corrida manual.
